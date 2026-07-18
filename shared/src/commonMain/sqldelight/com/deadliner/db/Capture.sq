@@ -1,0 +1,13 @@
+selectUnconsumed:
+SELECT uid, text, source, created_at, updated_at, is_consumed, is_deleted FROM capture_item
+WHERE is_deleted = 0 AND is_consumed = 0 ORDER BY created_at DESC;
+
+insertCapture:
+INSERT OR IGNORE INTO capture_item (uid, text, source, created_at, updated_at, is_consumed, is_deleted)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+updateCapture:
+UPDATE capture_item SET text = ?, source = ?, updated_at = ?, is_consumed = ?, is_deleted = ? WHERE uid = ?;
+
+softDeleteCapture:
+UPDATE capture_item SET is_deleted = 1, updated_at = ? WHERE uid = ?;

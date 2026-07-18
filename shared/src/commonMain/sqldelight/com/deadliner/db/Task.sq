@@ -1,0 +1,23 @@
+selectAll:
+SELECT uid, title, note, start_at, due_at, state, completed_at, category_uid, is_starred, calendar_event_id,
+       created_at, updated_at, is_deleted
+FROM task
+WHERE is_deleted = 0
+ORDER BY due_at, created_at;
+
+selectByUid:
+SELECT uid, title, note, start_at, due_at, state, completed_at, category_uid, is_starred, calendar_event_id,
+       created_at, updated_at, is_deleted
+FROM task WHERE uid = ?;
+
+insertTask:
+INSERT OR IGNORE INTO task (uid, title, note, start_at, due_at, state, completed_at, category_uid, is_starred,
+                  calendar_event_id, created_at, updated_at, is_deleted)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateTask:
+UPDATE task SET title = ?, note = ?, start_at = ?, due_at = ?, state = ?, completed_at = ?, category_uid = ?,
+    is_starred = ?, calendar_event_id = ?, updated_at = ?, is_deleted = ? WHERE uid = ?;
+
+softDeleteTask:
+UPDATE task SET is_deleted = 1, updated_at = ? WHERE uid = ?;

@@ -1,0 +1,18 @@
+selectForTask:
+SELECT uid, task_uid, content, is_completed, sort_order, created_at, updated_at, is_deleted
+FROM task_subtask WHERE task_uid = ? AND is_deleted = 0 ORDER BY sort_order, created_at;
+
+selectAllForTask:
+SELECT uid, task_uid, content, is_completed, sort_order, created_at, updated_at, is_deleted
+FROM task_subtask WHERE task_uid = ?;
+
+insertSubtask:
+INSERT OR IGNORE INTO task_subtask (uid, task_uid, content, is_completed, sort_order, created_at, updated_at, is_deleted)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+updateSubtask:
+UPDATE task_subtask SET task_uid = ?, content = ?, is_completed = ?, sort_order = ?, updated_at = ?, is_deleted = ?
+WHERE uid = ?;
+
+softDeleteSubtask:
+UPDATE task_subtask SET is_deleted = 1, updated_at = ? WHERE uid = ?;

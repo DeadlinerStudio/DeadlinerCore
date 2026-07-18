@@ -1,0 +1,136 @@
+CREATE TABLE category (
+    uid TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    icon_key TEXT NOT NULL,
+    color_hex TEXT NOT NULL,
+    is_preset INTEGER NOT NULL,
+    sort_order INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE habit (
+    uid TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    color INTEGER,
+    icon_key TEXT,
+    category_uid TEXT REFERENCES category(uid) ON DELETE SET NULL,
+    period TEXT NOT NULL,
+    times_per_period INTEGER NOT NULL,
+    goal_type TEXT NOT NULL,
+    total_target INTEGER,
+    status TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    reminder_local_time TEXT,
+    reminder_enabled INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE task (
+    uid TEXT NOT NULL PRIMARY KEY,
+    title TEXT NOT NULL,
+    note TEXT NOT NULL,
+    start_at TEXT,
+    due_at TEXT,
+    state TEXT NOT NULL,
+    completed_at TEXT,
+    category_uid TEXT REFERENCES category(uid) ON DELETE SET NULL,
+    is_starred INTEGER NOT NULL,
+    calendar_event_id INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE task_subtask (
+    uid TEXT NOT NULL PRIMARY KEY,
+    task_uid TEXT NOT NULL REFERENCES task(uid),
+    content TEXT NOT NULL,
+    is_completed INTEGER NOT NULL,
+    sort_order INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE habit_record (
+    uid TEXT NOT NULL PRIMARY KEY,
+    habit_uid TEXT NOT NULL REFERENCES habit(uid),
+    occurred_on TEXT NOT NULL,
+    count INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE habit_schedule_item (
+    uid TEXT NOT NULL PRIMARY KEY,
+    habit_uid TEXT NOT NULL REFERENCES habit(uid),
+    due_at TEXT NOT NULL,
+    state TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE capture_item (
+    uid TEXT NOT NULL PRIMARY KEY,
+    text TEXT NOT NULL,
+    source TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    is_consumed INTEGER NOT NULL DEFAULT 0,
+    is_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE memory_fragment (
+    uid TEXT NOT NULL PRIMARY KEY,
+    content TEXT NOT NULL,
+    category TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    importance INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE user_profile (
+    uid TEXT NOT NULL PRIMARY KEY,
+    nickname TEXT NOT NULL,
+    avatar_file_name TEXT,
+    tier TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE changelog (
+    id TEXT NOT NULL PRIMARY KEY,
+    table_name TEXT NOT NULL,
+    record_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    changed_fields TEXT,
+    client_timestamp INTEGER NOT NULL,
+    server_timestamp INTEGER,
+    device_id TEXT NOT NULL,
+    synced INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX idx_category_sort ON category(is_deleted, sort_order);
+CREATE INDEX idx_task_state_due ON task(is_deleted, state, due_at);
+CREATE INDEX idx_task_category ON task(category_uid);
+CREATE INDEX idx_subtask_task ON task_subtask(task_uid, sort_order);
+CREATE INDEX idx_habit_category ON habit(is_deleted, category_uid, sort_order);
+CREATE INDEX idx_habit_record_habit ON habit_record(habit_uid, is_deleted, occurred_on);
+CREATE INDEX idx_habit_schedule_habit ON habit_schedule_item(habit_uid, is_deleted, due_at);
+CREATE INDEX idx_capture_consumed ON capture_item(is_deleted, is_consumed, created_at);
+CREATE INDEX idx_memory_created ON memory_fragment(is_deleted, created_at);
+CREATE INDEX idx_changelog_synced ON changelog(synced, server_timestamp);
+CREATE INDEX idx_changelog_record ON changelog(table_name, record_id);
+
+enableForeignKeys:
+PRAGMA foreign_keys = 1;

@@ -1,0 +1,32 @@
+insertChange:
+INSERT INTO changelog (
+    id, table_name, record_id, operation, changed_fields, client_timestamp, server_timestamp, device_id, synced
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+insertRemoteChangeIfAbsent:
+INSERT OR IGNORE INTO changelog (
+    id, table_name, record_id, operation, changed_fields, client_timestamp, server_timestamp, device_id, synced
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1);
+
+selectPending:
+SELECT id, table_name, record_id, operation, changed_fields, client_timestamp, server_timestamp, device_id, synced
+FROM changelog
+WHERE synced = 0
+ORDER BY client_timestamp ASC;
+
+selectLatestForRecord:
+SELECT id, table_name, record_id, operation, changed_fields, client_timestamp, server_timestamp, device_id, synced
+FROM changelog
+WHERE table_name = ? AND record_id = ?
+ORDER BY client_timestamp DESC, device_id DESC, id DESC
+LIMIT 1;
+
+selectLatestServerTimestamp:
+SELECT MAX(server_timestamp)
+FROM changelog
+WHERE server_timestamp IS NOT NULL;
+
+markSynced:
+UPDATE changelog
+SET synced = 1, server_timestamp = ?
+WHERE id IN ?;

@@ -1,0 +1,36 @@
+# Deadliner NEW ERA Core Preview
+
+This repository hosts the isolated Kotlin Multiplatform domain, persistence, and synchronization core described in `specs/kmp-persistence-sync/`. HarmonyOS uses the CPF-KMP-CMP native toolchain.
+
+## Current Foundation
+
+`shared/src/commonMain/kotlin/com/deadliner/domain` now contains the stable cross-platform domain contract:
+
+- Independent `Task` / `TaskSubtask` and `Habit` / `HabitRecord` aggregates.
+- `Category`, sync versioning/change sets, AI proposals, memory snapshots, and user tiers.
+- No `DDLItem`, `Habit.ddlId`, `habit_ddl_link`, or Harmony JVM runtime target. HarmonyOS is an `ohosArm64` native library.
+
+SQLDelight schema and repositories implement these models without redefining them. The reconciled Android/iOS final DDL is documented in `specs/kmp-persistence-sync/android-ios-reconciliation.md`.
+
+## Build
+
+The CPF toolchain requires JDK 17 or newer. The wrapper uses Tencent's Gradle distribution mirror, Aliyun mirrors for public Maven/Google/Gradle-plugin dependencies, and CPF's Maven repository only for its Harmony-compatible Kotlin, Kotlinx, SQLDelight, and Touchlab variants. Compile the shared module with:
+
+```bash
+JAVA_HOME=/Library/Java/JavaVirtualMachines/zulu-21.jdk/Contents/Home \
+  ./gradlew :shared:macosArm64Test --no-daemon --console=plain
+```
+
+The only preview database name is `deadliner_new_era.db`. It is intentionally separate from every v5 database.
+
+On an Apple Silicon Mac, run the real SQLite integration suite with:
+
+```bash
+bash runscript/testMacDatabase.sh
+```
+
+## Boundaries
+
+- `shared` owns the domain contract now, then schema, queries, repositories, changelog and LWW synchronization orchestration.
+- Android and iOS own SQLDelight drivers. HarmonyOS uses CPF's `ohosArm64` target and SQLDelight `NativeSqliteDriver`; its NAPI host only loads the native shared library.
+- Network transport and remote business-table application are ports, not HTTP implementations.

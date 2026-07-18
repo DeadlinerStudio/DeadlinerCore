@@ -1,0 +1,53 @@
+name: Core build
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  common-and-android:
+    name: Common metadata and Android
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile common and Android packages
+        run: >-
+          ./gradlew
+          :shared:compileKotlinMetadata
+          :shared:compileDebugKotlinAndroid
+          :shared:compileReleaseKotlinAndroid
+          --no-daemon --console=plain --stacktrace
+
+  native:
+    name: macOS and HarmonyOS native
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile macOS and HarmonyOS packages, then run native tests
+        run: >-
+          ./gradlew
+          :shared:compileKotlinMacosArm64
+          :shared:compileKotlinOhosArm64
+          :shared:macosArm64Test
+          --no-daemon --console=plain --stacktrace

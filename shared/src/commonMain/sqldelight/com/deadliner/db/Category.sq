@@ -1,0 +1,21 @@
+selectAll:
+SELECT uid, name, icon_key, color_hex, is_preset, sort_order, created_at, updated_at, is_deleted
+FROM category
+WHERE is_deleted = 0
+ORDER BY sort_order, name;
+
+selectByUid:
+SELECT uid, name, icon_key, color_hex, is_preset, sort_order, created_at, updated_at, is_deleted
+FROM category
+WHERE uid = ?;
+
+insertCategory:
+INSERT OR IGNORE INTO category (uid, name, icon_key, color_hex, is_preset, sort_order, created_at, updated_at, is_deleted)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateCategory:
+UPDATE category SET name = ?, icon_key = ?, color_hex = ?, is_preset = ?, sort_order = ?, updated_at = ?,
+    is_deleted = ? WHERE uid = ?;
+
+softDeleteCategory:
+UPDATE category SET is_deleted = 1, updated_at = ? WHERE uid = ?;
