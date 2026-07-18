@@ -1,12 +1,22 @@
+# Kotlin/Gradle and IDE output
 .gradle/
 .kotlin/
 build/
 **/build/
 .idea/
-.DS_Store
 *.iml
 local.properties
+
+# Apple local output
+.DS_Store
 DerivedData/
 *.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
 *.xcuserstate
+
+# Retained from the remote's initial Rust-oriented ignore rules
+debug
+target
+**/*.rs.bk
+*.pdb
+**/mutants.out*/
