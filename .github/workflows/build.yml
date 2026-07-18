@@ -34,7 +34,7 @@ jobs:
           --no-daemon --console=plain --stacktrace
 
   native:
-    name: macOS and HarmonyOS native
+    name: Apple and HarmonyOS native
     runs-on: macos-14
     timeout-minutes: 45
     steps:
@@ -44,9 +44,12 @@ jobs:
           distribution: temurin
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
-      - name: Compile macOS and HarmonyOS packages, then run native tests
+      - name: Compile Apple and HarmonyOS packages, then run native tests
         run: >-
           ./gradlew
+          :shared:compileKotlinIosArm64
+          :shared:compileKotlinIosSimulatorArm64
+          :shared:compileKotlinIosX64
           :shared:compileKotlinMacosArm64
           :shared:compileKotlinOhosArm64
           :shared:macosArm64Test
