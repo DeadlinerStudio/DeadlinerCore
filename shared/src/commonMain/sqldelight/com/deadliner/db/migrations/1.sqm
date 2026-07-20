@@ -1,0 +1,10 @@
+CREATE TABLE legacy_v2_version (
+    entity_kind TEXT NOT NULL,
+    entity_uid TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    ctr INTEGER NOT NULL,
+    dev TEXT NOT NULL,
+    PRIMARY KEY (entity_kind, entity_uid)
+);
+
+CREATE INDEX idx_legacy_v2_version_kind ON legacy_v2_version(entity_kind);

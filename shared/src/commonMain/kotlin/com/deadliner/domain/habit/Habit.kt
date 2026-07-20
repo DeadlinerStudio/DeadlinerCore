@@ -74,6 +74,12 @@ enum class HabitStatus {
 }
 
 @Serializable
+enum class HabitStatusAction { ARCHIVE, RESTORE }
+
+@Serializable
+enum class HabitActionOutcome { APPLIED, NO_OP, NOT_FOUND }
+
+@Serializable
 enum class HabitRecordStatus {
     COMPLETED,
     SKIPPED,

@@ -2,6 +2,10 @@ selectAll:
 SELECT uid, content, category, created_at, importance, updated_at, is_deleted
 FROM memory_fragment WHERE is_deleted = 0 ORDER BY created_at DESC;
 
+selectByUid:
+SELECT uid, content, category, created_at, importance, updated_at, is_deleted
+FROM memory_fragment WHERE uid = ?;
+
 insertMemory:
 INSERT OR IGNORE INTO memory_fragment (uid, content, category, created_at, importance, updated_at, is_deleted)
 VALUES (?, ?, ?, ?, ?, ?, ?);
@@ -11,10 +15,3 @@ UPDATE memory_fragment SET content = ?, category = ?, importance = ?, updated_at
 
 softDeleteMemory:
 UPDATE memory_fragment SET is_deleted = 1, updated_at = ? WHERE uid = ?;
-
-insertUserProfile:
-INSERT OR IGNORE INTO user_profile (uid, nickname, avatar_file_name, tier, created_at, updated_at, is_deleted)
-VALUES (?, ?, ?, ?, ?, ?, ?);
-
-updateUserProfile:
-UPDATE user_profile SET nickname = ?, avatar_file_name = ?, tier = ?, updated_at = ?, is_deleted = ? WHERE uid = ?;

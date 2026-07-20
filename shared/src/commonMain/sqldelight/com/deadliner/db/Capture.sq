@@ -2,6 +2,14 @@ selectUnconsumed:
 SELECT uid, text, source, created_at, updated_at, is_consumed, is_deleted FROM capture_item
 WHERE is_deleted = 0 AND is_consumed = 0 ORDER BY created_at DESC;
 
+selectAll:
+SELECT uid, text, source, created_at, updated_at, is_consumed, is_deleted FROM capture_item
+WHERE is_deleted = 0 ORDER BY created_at DESC;
+
+selectByUid:
+SELECT uid, text, source, created_at, updated_at, is_consumed, is_deleted FROM capture_item
+WHERE uid = ?;
+
 insertCapture:
 INSERT OR IGNORE INTO capture_item (uid, text, source, created_at, updated_at, is_consumed, is_deleted)
 VALUES (?, ?, ?, ?, ?, ?, ?);

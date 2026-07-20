@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
+import org.gradle.api.tasks.Copy
 
 plugins {
     alias(libs.plugins.androidLibrary)
@@ -25,9 +26,34 @@ kotlin {
         }
     }
     macosArm64()
+    val ohosSqliteStaticLibrariesDir = layout.buildDirectory.dir("intermediates/ohos-sqlite-static-libraries")
+    val extractOhosSqliteStaticLibraries by tasks.registering(Copy::class) {
+        from(providers.provider {
+                configurations.getByName("ohosArm64CInterop").files
+                    .filter { it.name.startsWith("sqliter-driver-ohosArm64Cinterop") }
+                    .map(::zipTree)
+        }) {
+            include("default/targets/ohos_arm64/included/*.a")
+            eachFile { path = name }
+            includeEmptyDirs = false
+        }
+        into(ohosSqliteStaticLibrariesDir)
+    }
+
     ohosArm64 {
         binaries.sharedLib {
             baseName = "DeadlinerCore"
+            // CPF SQLiter ships SQLite as archives inside its CInterop KLIB. Extract
+            // them into the build directory so the OHOS linker can resolve -lsqlite3.
+            linkerOpts(
+                "-L${ohosSqliteStaticLibrariesDir.get().asFile.absolutePath}",
+                "-lsqlite3",
+                "-lz",
+                "-lclang_rt.builtins",
+            )
+            linkTaskProvider.configure {
+                dependsOn(extractOhosSqliteStaticLibraries)
+            }
         }
     }
     sourceSets {
@@ -68,4 +94,18 @@ sqldelight {
             verifyMigrations.set(true)
         }
     }
+}
+
+val harmonyEntryDirectory = rootProject.projectDir.resolve("../../HarmonyOS/Deadliner/entry")
+
+tasks.register<Copy>("publishDebugOhosLibraryToDeadliner") {
+    dependsOn("linkDebugSharedOhosArm64")
+    from(layout.buildDirectory.file("bin/ohosArm64/debugShared/libDeadlinerCore.so"))
+    into(harmonyEntryDirectory.resolve("libs/arm64-v8a"))
+}
+
+tasks.register<Copy>("publishReleaseOhosLibraryToDeadliner") {
+    dependsOn("linkReleaseSharedOhosArm64")
+    from(layout.buildDirectory.file("bin/ohosArm64/releaseShared/libDeadlinerCore.so"))
+    into(harmonyEntryDirectory.resolve("libs/arm64-v8a"))
 }

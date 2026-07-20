@@ -5,6 +5,12 @@ FROM habit
 WHERE is_deleted = 0
 ORDER BY sort_order, created_at;
 
+selectAllIncludingDeleted:
+SELECT uid, name, description, color, icon_key, category_uid, period, times_per_period, goal_type,
+       total_target, status, sort_order, reminder_local_time, reminder_enabled, created_at, updated_at, is_deleted
+FROM habit
+ORDER BY sort_order, created_at;
+
 selectByUid:
 SELECT uid, name, description, color, icon_key, category_uid, period, times_per_period, goal_type,
        total_target, status, sort_order, reminder_local_time, reminder_enabled, created_at, updated_at, is_deleted

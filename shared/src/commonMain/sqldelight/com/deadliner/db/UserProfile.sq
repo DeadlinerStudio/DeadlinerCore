@@ -1,0 +1,17 @@
+selectAll:
+SELECT uid, nickname, avatar_file_name, tier, created_at, updated_at, is_deleted
+FROM user_profile WHERE is_deleted = 0 ORDER BY updated_at DESC;
+
+selectByUid:
+SELECT uid, nickname, avatar_file_name, tier, created_at, updated_at, is_deleted
+FROM user_profile WHERE uid = ?;
+
+insertUserProfile:
+INSERT OR IGNORE INTO user_profile (uid, nickname, avatar_file_name, tier, created_at, updated_at, is_deleted)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+updateUserProfile:
+UPDATE user_profile SET nickname = ?, avatar_file_name = ?, tier = ?, updated_at = ?, is_deleted = ? WHERE uid = ?;
+
+softDeleteUserProfile:
+UPDATE user_profile SET is_deleted = 1, updated_at = ? WHERE uid = ?;

@@ -5,6 +5,12 @@ FROM task
 WHERE is_deleted = 0
 ORDER BY due_at, created_at;
 
+selectAllIncludingDeleted:
+SELECT uid, title, note, start_at, due_at, state, completed_at, category_uid, is_starred, calendar_event_id,
+       created_at, updated_at, is_deleted
+FROM task
+ORDER BY due_at, created_at;
+
 selectByUid:
 SELECT uid, title, note, start_at, due_at, state, completed_at, category_uid, is_starred, calendar_event_id,
        created_at, updated_at, is_deleted

@@ -51,12 +51,22 @@ enum class TaskAction {
     UNARCHIVE,
 }
 
+@Serializable
+enum class TaskActionOutcome {
+    APPLIED,
+    NO_OP,
+    INVALID,
+    NOT_FOUND,
+}
+
 object TaskStateMachine {
     fun apply(current: TaskState, action: TaskAction): TaskState? = when (current to action) {
         TaskState.ACTIVE to TaskAction.MARK_COMPLETE -> TaskState.COMPLETED
+        TaskState.COMPLETED to TaskAction.MARK_COMPLETE -> TaskState.ACTIVE
         TaskState.COMPLETED to TaskAction.MARK_ARCHIVE -> TaskState.ARCHIVED
         TaskState.ARCHIVED to TaskAction.UNARCHIVE -> TaskState.COMPLETED
         TaskState.ACTIVE to TaskAction.MARK_GIVE_UP -> TaskState.ABANDONED
+        TaskState.ABANDONED to TaskAction.MARK_GIVE_UP -> TaskState.ACTIVE
         TaskState.ABANDONED to TaskAction.MARK_ARCHIVE -> TaskState.ABANDONED_ARCHIVED
         TaskState.ABANDONED_ARCHIVED to TaskAction.UNARCHIVE -> TaskState.ABANDONED
         TaskState.ACTIVE to TaskAction.RESTORE_ACTIVE,
@@ -66,8 +76,8 @@ object TaskStateMachine {
     }
 
     fun isNoOp(state: TaskState, action: TaskAction): Boolean = when (action) {
-        TaskAction.MARK_COMPLETE -> state == TaskState.COMPLETED
-        TaskAction.MARK_GIVE_UP -> state == TaskState.ABANDONED
+        TaskAction.MARK_COMPLETE -> false
+        TaskAction.MARK_GIVE_UP -> false
         TaskAction.RESTORE_ACTIVE -> state == TaskState.ACTIVE
         TaskAction.MARK_ARCHIVE -> state == TaskState.ARCHIVED || state == TaskState.ABANDONED_ARCHIVED
         TaskAction.UNARCHIVE -> state == TaskState.COMPLETED || state == TaskState.ABANDONED

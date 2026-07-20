@@ -2,7 +2,10 @@ package com.deadliner.db.repository
 
 import com.deadliner.db.AppDatabase
 import com.deadliner.domain.task.Task
+import com.deadliner.domain.task.TaskAction
+import com.deadliner.domain.task.TaskActionOutcome
 import com.deadliner.domain.task.TaskState
+import com.deadliner.domain.task.TaskStateMachine
 import com.deadliner.domain.task.TaskSubtask
 import com.deadliner.model.ChangeOperation
 import kotlinx.serialization.json.Json
@@ -21,6 +24,25 @@ class TaskRepository(
     fun create(task: Task) = save(task, ChangeOperation.INSERT)
 
     fun update(task: Task) = save(task, ChangeOperation.UPDATE)
+
+    /** KMP is the sole authority for persisted task-state transitions. */
+    fun applyAction(uid: String, action: TaskAction, occurredAt: String): TaskActionResult {
+        val existing = find(uid) ?: return TaskActionResult(null, TaskActionOutcome.NOT_FOUND)
+        val target = TaskStateMachine.apply(existing.state, action)
+        if (target == null) {
+            return TaskActionResult(
+                existing,
+                if (TaskStateMachine.isNoOp(existing.state, action)) TaskActionOutcome.NO_OP else TaskActionOutcome.INVALID,
+            )
+        }
+        val updated = existing.copy(
+            state = target,
+            completedAt = completedAtAfter(existing, target, occurredAt),
+            updatedAt = occurredAt,
+        )
+        save(updated, ChangeOperation.UPDATE)
+        return TaskActionResult(updated, TaskActionOutcome.APPLIED)
+    }
 
     fun delete(uid: String, updatedAt: String) {
         database.transaction {
@@ -62,6 +84,12 @@ class TaskRepository(
         }
     }
 
+    private fun completedAtAfter(current: Task, target: TaskState, occurredAt: String): String? = when (target) {
+        TaskState.COMPLETED -> occurredAt
+        TaskState.ARCHIVED -> current.completedAt
+        TaskState.ACTIVE, TaskState.ABANDONED, TaskState.ABANDONED_ARCHIVED -> null
+    }
+
     private fun withSubtasks(task: Task): Task = task.copy(
         subtasks = database.taskSubtaskQueries.selectForTask(task.uid, ::toSubtask).executeAsList(),
     )
@@ -82,6 +110,11 @@ class TaskRepository(
         createdAt: String, updatedAt: String, isDeleted: Long,
     ) = TaskSubtask(uid, taskUid, content, isCompleted.asBoolean(), sortOrder.toInt(), createdAt, updatedAt, isDeleted.asBoolean())
 }
+
+data class TaskActionResult(
+    val task: Task?,
+    val outcome: TaskActionOutcome,
+)
 
 private fun TaskState.persistedValue(): String = when (this) {
     TaskState.ACTIVE -> "active"

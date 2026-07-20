@@ -1,0 +1,179 @@
+package com.deadliner.viewmodel.task
+
+import com.deadliner.db.repository.TaskRepository
+import com.deadliner.domain.task.Task
+import com.deadliner.domain.task.TaskAction
+import com.deadliner.domain.task.TaskSubtask
+import com.deadliner.platform.PlatformIdentity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.datetime.Clock
+
+/**
+ * 任务详情页 ViewModel。
+ *
+ * 核心设计：
+ * 1. 持有单个任务的内存缓存
+ * 2. 支持任务状态流转和子任务管理
+ * 3. 使用配置对象而非多参数，易于扩展
+ */
+class TaskDetailViewModel(
+    private val taskRepository: TaskRepository,
+    private val taskUid: String,
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob()),
+) {
+    // ===== 内存缓存 =====
+    private val _uiState = MutableStateFlow(TaskDetailUiState())
+    val uiState: StateFlow<TaskDetailUiState> = _uiState.asStateFlow()
+
+    // ===== 初始化（从 DB 加载到内存缓存）=====
+    fun initialize() {
+        scope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            try {
+                val task = taskRepository.find(taskUid)
+                _uiState.update {
+                    it.copy(
+                        task = task,
+                        isLoading = false,
+                        error = null,
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        error = e.message,
+                    )
+                }
+            }
+        }
+    }
+
+    // ===== 任务状态流转 =====
+
+    fun markComplete() {
+        applyAction(TaskAction.MARK_COMPLETE)
+    }
+
+    fun markArchive() {
+        applyAction(TaskAction.MARK_ARCHIVE)
+    }
+
+    fun markGiveUp() {
+        applyAction(TaskAction.MARK_GIVE_UP)
+    }
+
+    fun restoreActive() {
+        applyAction(TaskAction.RESTORE_ACTIVE)
+    }
+
+    fun unarchive() {
+        applyAction(TaskAction.UNARCHIVE)
+    }
+
+    private fun applyAction(action: TaskAction) {
+        scope.launch {
+            try {
+                val result = taskRepository.applyAction(taskUid, action, Clock.System.now().toString())
+                result.task?.let { task ->
+                    _uiState.update { it.copy(task = task, error = null) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = e.message) }
+            }
+        }
+    }
+
+    // ===== 子任务管理 =====
+
+    fun addSubtask(config: SubtaskCreateConfig) {
+        scope.launch {
+            try {
+                val currentTask = _uiState.value.task ?: return@launch
+                val subtask = TaskSubtask(
+                    uid = PlatformIdentity.newId(),
+                    taskUid = taskUid,
+                    content = config.content,
+                    isCompleted = false,
+                    sortOrder = config.sortOrder,
+                    createdAt = Clock.System.now().toString(),
+                    updatedAt = Clock.System.now().toString(),
+                )
+                val updatedTask = currentTask.copy(subtasks = currentTask.subtasks + subtask)
+                taskRepository.update(updatedTask)
+                _uiState.update { it.copy(task = updatedTask, error = null) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = e.message) }
+            }
+        }
+    }
+
+    fun toggleSubtask(subtaskUid: String) {
+        scope.launch {
+            try {
+                val currentTask = _uiState.value.task ?: return@launch
+                val updatedSubtasks = currentTask.subtasks.map { subtask ->
+                    if (subtask.uid == subtaskUid) {
+                        subtask.copy(
+                            isCompleted = !subtask.isCompleted,
+                            updatedAt = Clock.System.now().toString(),
+                        )
+                    } else {
+                        subtask
+                    }
+                }
+                val updatedTask = currentTask.copy(subtasks = updatedSubtasks)
+                taskRepository.update(updatedTask)
+                _uiState.update { it.copy(task = updatedTask, error = null) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = e.message) }
+            }
+        }
+    }
+
+    fun deleteSubtask(subtaskUid: String) {
+        scope.launch {
+            try {
+                val currentTask = _uiState.value.task ?: return@launch
+                val updatedSubtasks = currentTask.subtasks.filter { it.uid != subtaskUid }
+                val updatedTask = currentTask.copy(subtasks = updatedSubtasks)
+                taskRepository.update(updatedTask)
+                _uiState.update { it.copy(task = updatedTask, error = null) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = e.message) }
+            }
+        }
+    }
+
+    // ===== 删除任务 =====
+    fun deleteTask() {
+        scope.launch {
+            try {
+                taskRepository.delete(taskUid, Clock.System.now().toString())
+                _uiState.update { it.copy(task = null, error = null) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = e.message) }
+            }
+        }
+    }
+}
+
+// ===== UiState 定义 =====
+data class TaskDetailUiState(
+    val task: Task? = null,
+    val isLoading: Boolean = true,
+    val error: String? = null,
+)
+
+// ===== 子任务配置对象 =====
+data class SubtaskCreateConfig(
+    val content: String,
+    val sortOrder: Int = 0,
+)

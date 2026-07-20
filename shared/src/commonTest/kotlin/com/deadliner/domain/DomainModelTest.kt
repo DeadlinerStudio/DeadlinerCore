@@ -19,8 +19,9 @@ class DomainModelTest {
         assertEquals(TaskState.COMPLETED, TaskStateMachine.apply(TaskState.ACTIVE, TaskAction.MARK_COMPLETE))
         assertEquals(TaskState.ABANDONED_ARCHIVED, TaskStateMachine.apply(TaskState.ABANDONED, TaskAction.MARK_ARCHIVE))
         assertNull(TaskStateMachine.apply(TaskState.ACTIVE, TaskAction.MARK_ARCHIVE))
-        assertNull(TaskStateMachine.apply(TaskState.COMPLETED, TaskAction.MARK_COMPLETE))
-        assertTrue(TaskStateMachine.isNoOp(TaskState.COMPLETED, TaskAction.MARK_COMPLETE))
+        assertEquals(TaskState.ACTIVE, TaskStateMachine.apply(TaskState.COMPLETED, TaskAction.MARK_COMPLETE))
+        assertEquals(TaskState.ACTIVE, TaskStateMachine.apply(TaskState.ABANDONED, TaskAction.MARK_GIVE_UP))
+        assertTrue(!TaskStateMachine.isNoOp(TaskState.COMPLETED, TaskAction.MARK_COMPLETE))
         assertTrue(TaskStateMachine.isVisibleInMainList(TaskState.ABANDONED))
     }
 
