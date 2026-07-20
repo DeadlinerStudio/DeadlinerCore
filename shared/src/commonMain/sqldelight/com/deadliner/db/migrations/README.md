@@ -1,3 +1,5 @@
 # Migration policy
 
-`deadliner_new_era.db` is an isolated preview database with no predecessor schema, so this initial release intentionally contains no `.sqm` migration. A numbered `.sqm` file must be added only when a released NEW ERA schema changes; it must migrate the immediately previous schema and pass SQLDelight migration verification.
+`deadliner_new_era.db` is an isolated preview database. The committed `1.db` is the Phase 1 baseline schema; `1.sqm` upgrades that baseline with the `legacy_v2_version` table required by Phase 2 reconciliation.
+
+For every subsequent released schema change, commit the pre-migration `<version>.db` schema snapshot and a matching `<version>.sqm` migration. The Gradle `verifySqlDelightMigration` task must pass before the change is accepted.

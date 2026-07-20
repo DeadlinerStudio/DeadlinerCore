@@ -29,6 +29,16 @@ On an Apple Silicon Mac, run the real SQLite integration suite with:
 bash runscript/testMacDatabase.sh
 ```
 
+## Phase 1/2 acceptance
+
+Run the repeatable shared-core acceptance matrix with:
+
+```bash
+zsh runscript/verifyPhase12Acceptance.sh
+```
+
+It compiles Android, iOS Simulator and macOS sources; links the iOS Simulator framework; runs macOS SQLite/domain tests; verifies SQLDelight migration history; and links the HarmonyOS `ohosArm64` shared library. The current CPF Kotlin/Native toolchain links the iOS framework successfully, but its `iosSimulatorArm64Test` executable fails to link on Xcode 26.5 with an unresolved `_Kotlin_KonanStartStub`. This is documented as a toolchain blocker rather than a passing iOS runtime test.
+
 ## Boundaries
 
 - `shared` owns the domain contract now, then schema, queries, repositories, changelog and LWW synchronization orchestration.

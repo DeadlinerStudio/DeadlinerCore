@@ -1,8 +1,10 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package com.deadliner.platform
 
 import platform.BackgroundTasks.BGTaskScheduler
 import platform.BackgroundTasks.BGAppRefreshTaskRequest
-import platform.BackgroundTasks.BGProcessingTaskRequest
+import platform.Foundation.NSDate
 
 /**
  * iOS BackgroundScheduler actual 实现。
@@ -14,8 +16,9 @@ actual class BackgroundScheduler {
 
     actual fun schedulePeriodicSync(config: PeriodicSyncConfig) {
         val request = BGAppRefreshTaskRequest("com.deadliner.sync")
-        request.earliestBeginDate = platform.Foundation.NSDate.dateWithTimeIntervalSinceNow(
-            config.intervalMinutes.toLong() * 60,
+        request.earliestBeginDate = NSDate(
+            timeIntervalSinceReferenceDate = NSDate().timeIntervalSinceReferenceDate +
+                config.intervalMinutes.toDouble() * 60.0,
         )
 
         scheduler.submitTaskRequest(request, null)

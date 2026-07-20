@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package com.deadliner.platform
 
 import platform.UserNotifications.UNUserNotificationCenter
@@ -57,7 +59,6 @@ actual class PermissionPort {
             platform.UserNotifications.UNAuthorizationStatusAuthorized -> PermissionStatus.GRANTED
             platform.UserNotifications.UNAuthorizationStatusDenied -> PermissionStatus.DENIED
             platform.UserNotifications.UNAuthorizationStatusNotDetermined -> PermissionStatus.NOT_DETERMINED
-            platform.UserNotifications.UNAuthorizationStatusRestricted -> PermissionStatus.RESTRICTED
             else -> PermissionStatus.NOT_DETERMINED
         }
     }

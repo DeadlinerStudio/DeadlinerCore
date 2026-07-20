@@ -1,14 +1,23 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package com.deadliner.platform
 
+import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.usePinned
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSDocumentDirectory
 import platform.Foundation.NSCachesDirectory
 import platform.Foundation.NSURL
-import platform.Foundation.NSData
-import platform.Foundation.dataWithContentsOfFile
-import platform.Foundation.writeToFile
 import platform.Foundation.NSFileAttributeKey
 import platform.Foundation.NSFileSize
+import platform.posix.SEEK_END
+import platform.posix.fclose
+import platform.posix.fopen
+import platform.posix.fread
+import platform.posix.fseek
+import platform.posix.ftell
+import platform.posix.fwrite
+import platform.posix.rewind
 
 /**
  * iOS FileStorage actual 实现。
@@ -20,14 +29,40 @@ actual class FileStorage {
 
     actual fun save(key: String, data: ByteArray) {
         val path = getDocumentPath(key)
-        val nsData = data.toNSData()
-        nsData.writeToFile(path, true)
+        val file = fopen(path, "wb") ?: error("Unable to open $path for writing")
+        try {
+            if (data.isNotEmpty()) {
+                data.usePinned { pinned ->
+                    check(fwrite(pinned.addressOf(0), 1u, data.size.toULong(), file) == data.size.toULong()) {
+                        "Unable to write $path"
+                    }
+                }
+            }
+        } finally {
+            fclose(file)
+        }
     }
 
     actual fun load(key: String): ByteArray? {
         val path = getDocumentPath(key)
-        val nsData = NSData.dataWithContentsOfFile(path) ?: return null
-        return nsData.toByteArray()
+        val file = fopen(path, "rb") ?: return null
+        try {
+            check(fseek(file, 0, SEEK_END) == 0) { "Unable to seek $path" }
+            val size = ftell(file)
+            check(size >= 0) { "Unable to determine size for $path" }
+            rewind(file)
+            return ByteArray(size.toInt()).also { data ->
+                if (data.isNotEmpty()) {
+                    data.usePinned { pinned ->
+                        check(fread(pinned.addressOf(0), 1u, data.size.toULong(), file) == data.size.toULong()) {
+                            "Unable to read $path"
+                        }
+                    }
+                }
+            }
+        } finally {
+            fclose(file)
+        }
     }
 
     actual fun delete(key: String) {
@@ -68,21 +103,5 @@ actual class FileStorage {
 
     private fun getDocumentPath(key: String): String {
         return "${getDocumentDirectory()}/$key"
-    }
-}
-
-// ===== NSData 与 ByteArray 转换 =====
-
-fun ByteArray.toNSData(): NSData {
-    return this.usePinned { pinned ->
-        NSData.dataWithBytes(pinned.addressOf(0), this.size.toULong())
-    }
-}
-
-fun NSData.toByteArray(): ByteArray {
-    return ByteArray(this.length.toInt()).apply {
-        usePinned { pinned ->
-            platform.posix.memcpy(pinned.addressOf(0), this@toByteArray.bytes, this@toByteArray.length)
-        }
     }
 }

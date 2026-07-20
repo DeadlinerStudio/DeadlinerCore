@@ -66,6 +66,8 @@ kotlin {
         }
         androidMain.dependencies {
             implementation(libs.sqldelight.android.driver)
+            implementation(libs.androidx.core)
+            implementation(libs.androidx.work.runtime)
         }
         iosMain.dependencies {
             implementation(libs.sqldelight.native.driver)
@@ -91,6 +93,7 @@ sqldelight {
     databases {
         create("AppDatabase") {
             packageName.set("com.deadliner.db")
+            schemaOutputDirectory.set(file("src/commonMain/sqldelight/com/deadliner/db/migrations"))
             verifyMigrations.set(true)
         }
     }

@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package com.deadliner.platform
 
 import platform.UserNotifications.UNMutableNotificationContent
@@ -25,7 +27,7 @@ actual class NotificationService {
 
         // 计算触发时间（简化实现，实际需要计算 dueAt - reminderMinutes）
         val trigger = UNTimeIntervalNotificationTrigger.triggerWithTimeInterval(
-            timeInterval = config.reminderMinutes.toLong() * 60,
+            timeInterval = config.reminderMinutes.toDouble() * 60.0,
             repeats = false,
         )
 
@@ -67,16 +69,8 @@ actual class NotificationService {
             setSound(defaultSound())
         }
 
-        // 解析 alarmTime (HH:mm)
-        val parts = config.alarmTime.split(":")
-        val hour = parts.getOrNull(0)?.toIntOrNull() ?: 8
-        val minute = parts.getOrNull(1)?.toIntOrNull() ?: 0
-
         // 计算到下一个提醒时间的秒数（简化实现）
-        val now = kotlinx.datetime.Clock.System.now()
-        val today = kotlinx.datetime.TimeZone.currentSystemDefault()
-        val targetTime = now // 实际需要计算到下一个 hour:minute 的时间
-        val intervalSeconds = 24 * 60 * 60L // 每天
+        val intervalSeconds = 24.0 * 60.0 * 60.0 // 每天
 
         val trigger = UNTimeIntervalNotificationTrigger.triggerWithTimeInterval(
             timeInterval = intervalSeconds,
@@ -120,14 +114,9 @@ actual class NotificationService {
             setSound(defaultSound())
         }
 
-        // 解析 time (HH:mm)
-        val parts = config.time.split(":")
-        val hour = parts.getOrNull(0)?.toIntOrNull() ?: 20
-        val minute = parts.getOrNull(1)?.toIntOrNull() ?: 0
-
         // 每天触发
         val trigger = UNTimeIntervalNotificationTrigger.triggerWithTimeInterval(
-            timeInterval = 24 * 60 * 60L,
+            timeInterval = 24.0 * 60.0 * 60.0,
             repeats = true,
         )
 

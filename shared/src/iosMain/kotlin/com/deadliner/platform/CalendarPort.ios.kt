@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package com.deadliner.platform
 
 import platform.EventKit.EKEventStore
@@ -7,6 +9,7 @@ import platform.EventKit.EKEntityType
 import platform.EventKit.EKAuthorizationStatus
 import platform.EventKit.EKAuthorizationStatusAuthorized
 import platform.EventKit.EKAuthorizationStatusNotDetermined
+import platform.EventKit.EKSpan
 import platform.Foundation.NSDate
 import platform.Foundation.dateWithTimeIntervalSince1970
 
@@ -40,10 +43,10 @@ actual class CalendarPort {
             setEndDate(endDate)
         }
 
-        val success = eventStore.saveEvent(event, span = 0, error = null)
+        val success = eventStore.saveEvent(event, span = EKSpan.EKSpanThisEvent, error = null)
         return if (success) {
             // 返回事件 ID（简化实现）
-            event.eventIdentifier.hashCode().toLong()
+            event.eventIdentifier?.hashCode()?.toLong()
         } else {
             null
         }
@@ -80,8 +83,8 @@ actual class CalendarPort {
                 CalendarAccount(
                     id = calendar.calendarIdentifier.hashCode().toLong(),
                     name = calendar.title,
-                    accountName = calendar.source.title,
-                    accountType = calendar.source.sourceType,
+                    accountName = calendar.source?.title ?: "",
+                    accountType = calendar.source?.sourceType?.toString() ?: "",
                 )
             }
             ?: emptyList()
