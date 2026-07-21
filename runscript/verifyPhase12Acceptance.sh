@@ -21,5 +21,5 @@ gradle_command=(./gradlew --offline --no-daemon --console=plain --warning-mode=n
 
 "${gradle_command[@]}" :shared:linkDebugSharedOhosArm64
 
-print "Phase 1/2 compilation acceptance passed."
+print "Shared-core compilation acceptance passed."
 print "Note: :shared:iosSimulatorArm64Test is excluded because CPF Kotlin/Native cannot link its test executable on this Xcode toolchain (_Kotlin_KonanStartStub)."

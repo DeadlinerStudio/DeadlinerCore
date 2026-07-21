@@ -5,6 +5,7 @@ import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskAction
 import com.deadliner.domain.task.TaskState
 import com.deadliner.platform.PlatformIdentity
+import com.deadliner.service.NotificationOrchestrator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -26,6 +27,7 @@ import kotlinx.datetime.Clock
 class TaskListViewModel(
     private val taskRepository: TaskRepository,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob()),
+    private val notificationOrchestrator: NotificationOrchestrator? = null,
 ) {
     // ===== 内存缓存（IO 优化核心）=====
     private val _uiState = MutableStateFlow(TaskListUiState())
@@ -74,6 +76,7 @@ class TaskListViewModel(
                     updatedAt = Clock.System.now().toString(),
                 )
                 taskRepository.create(task)
+                notificationOrchestrator?.onTaskCreated(task)
                 // 直接更新内存缓存，无需重新查询 DB
                 _uiState.update { state ->
                     state.copy(
@@ -94,6 +97,7 @@ class TaskListViewModel(
             try {
                 val result = taskRepository.applyAction(uid, TaskAction.MARK_COMPLETE, Clock.System.now().toString())
                 result.task?.let { task ->
+                    notificationOrchestrator?.onTaskUpdated(task)
                     // 直接更新内存缓存中的特定任务
                     _uiState.update { state ->
                         state.copy(
@@ -114,6 +118,7 @@ class TaskListViewModel(
         scope.launch {
             try {
                 taskRepository.delete(uid, Clock.System.now().toString())
+                notificationOrchestrator?.onTaskDeleted(uid)
                 // 从内存缓存中移除
                 _uiState.update { state ->
                     state.copy(

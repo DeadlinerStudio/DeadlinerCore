@@ -7,20 +7,20 @@
 
 ## 阶段 2：基础设施
 
-- [ ] 为 `NotificationService` 建立可 fake 的 common gateway。
-- [ ] 配置 coroutine test 依赖和测试 scope 注入方式。
+- [x] 为 `NotificationService` 建立可 fake 的 common gateway。
+- [x] 通过构造参数注入 coroutine scope；macOS 测试复用 `runBlocking` context，无需新增测试依赖。
 
 ## 阶段 3：功能实现
 
-- [ ] 实现 `NotificationOrchestrator` 的 Task/Habit 生命周期与全量刷新。
-- [ ] 接入所有 Task 写路径的 ViewModel。
-- [ ] 暴露 `DeadlinerDatabase` 的 orchestrator 工厂。
+- [x] 实现 `NotificationOrchestrator` 的 Task/Habit 生命周期与全量刷新。
+- [x] 接入所有 Task 写路径的 ViewModel，并在 Habit 列表的创建/删除路径接入。
+- [x] 暴露 `DeadlinerDatabase` 的 orchestrator 工厂。
 
 ## 阶段 4：验证与回写
 
-- [ ] 编写 common service 策略测试与 macOS ViewModel/SQLite 集成测试。
-- [ ] 执行规格校验、大文件扫描与跨端构建矩阵。
-- [ ] 回写实际通过项和 iOS test-executable 工具链阻塞。
+- [x] 编写 common service 策略测试与 macOS ViewModel/SQLite 集成测试。
+- [x] 执行规格校验、大文件扫描与跨端构建矩阵。
+- [x] 回写实际通过项：Android 编译、iOS Simulator 编译/framework 链接、macOS 测试、HarmonyOS CPF 链接均已通过；iOS test executable 继续受 `_Kotlin_KonanStartStub` 工具链错误阻塞。
 
 ## 阶段 1：规格冻结
 

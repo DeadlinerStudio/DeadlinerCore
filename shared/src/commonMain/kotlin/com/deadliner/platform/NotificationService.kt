@@ -10,7 +10,7 @@ import kotlinx.datetime.DayOfWeek
  * - Android: AlarmManager + BroadcastReceiver
  * - HarmonyOS: reminderAgentManager
  */
-expect class NotificationService {
+interface NotificationGateway {
     // ===== 任务通知 =====
 
     /** 设置任务到期提醒 */
@@ -56,6 +56,27 @@ expect class NotificationService {
 
     /** 刷新所有通知（批量重建） */
     fun refreshAll(tasks: List<TaskNotificationInfo>, habits: List<HabitNotificationInfo>)
+}
+
+/**
+ * Native notification bridge retained as the public platform entry point.
+ *
+ * Business services depend on [NotificationGateway] so their behavior is testable without a
+ * system notification center, alarm manager, or HarmonyOS NAPI bridge.
+ */
+expect class NotificationService : NotificationGateway {
+    override fun setTaskNotification(config: TaskNotificationConfig)
+    override fun cancelTaskNotification(taskUid: String)
+    override fun cancelAllTaskNotifications()
+    override fun setHabitNotification(config: HabitNotificationConfig)
+    override fun cancelHabitNotification(habitUid: String)
+    override fun cancelAllHabitNotifications()
+    override fun setDailySummaryNotification(config: DailySummaryConfig)
+    override fun cancelDailySummaryNotification()
+    override fun setUpcomingLiveUpdate(config: UpcomingLiveUpdateConfig)
+    override fun cancelUpcomingLiveUpdate(taskUid: String)
+    override fun cancelAll()
+    override fun refreshAll(tasks: List<TaskNotificationInfo>, habits: List<HabitNotificationInfo>)
 }
 
 // ===== 配置对象（易于扩展新参数）=====

@@ -13,12 +13,12 @@ import kotlinx.datetime.DayOfWeek
  *
  * 使用 UNUserNotificationCenter 实现通知调度。
  */
-actual class NotificationService {
+actual class NotificationService : NotificationGateway {
     private val notificationCenter = UNUserNotificationCenter.currentNotificationCenter()
 
     // ===== 任务通知 =====
 
-    actual fun setTaskNotification(config: TaskNotificationConfig) {
+    actual override fun setTaskNotification(config: TaskNotificationConfig) {
         val content = UNMutableNotificationContent().apply {
             setTitle(config.title)
             setBody("还有 ${config.reminderMinutes} 分钟截止")
@@ -42,13 +42,13 @@ actual class NotificationService {
         }
     }
 
-    actual fun cancelTaskNotification(taskUid: String) {
+    actual override fun cancelTaskNotification(taskUid: String) {
         notificationCenter.removePendingNotificationRequestsWithIdentifiers(
             identifiers = listOf("TASK_$taskUid"),
         )
     }
 
-    actual fun cancelAllTaskNotifications() {
+    actual override fun cancelAllTaskNotifications() {
         // 获取所有待处理的通知，过滤并取消任务相关通知
         notificationCenter.getPendingNotificationRequestsWithCompletionHandler { requests ->
             val taskIdentifiers = requests
@@ -62,7 +62,7 @@ actual class NotificationService {
 
     // ===== 习惯通知 =====
 
-    actual fun setHabitNotification(config: HabitNotificationConfig) {
+    actual override fun setHabitNotification(config: HabitNotificationConfig) {
         val content = UNMutableNotificationContent().apply {
             setTitle("习惯提醒")
             setBody("该完成 ${config.name} 了")
@@ -88,13 +88,13 @@ actual class NotificationService {
         }
     }
 
-    actual fun cancelHabitNotification(habitUid: String) {
+    actual override fun cancelHabitNotification(habitUid: String) {
         notificationCenter.removePendingNotificationRequestsWithIdentifiers(
             identifiers = listOf("HABIT_$habitUid"),
         )
     }
 
-    actual fun cancelAllHabitNotifications() {
+    actual override fun cancelAllHabitNotifications() {
         notificationCenter.getPendingNotificationRequestsWithCompletionHandler { requests ->
             val habitIdentifiers = requests
                 ?.filterIsInstance<UNNotificationRequest>()
@@ -107,7 +107,7 @@ actual class NotificationService {
 
     // ===== 每日统计通知 =====
 
-    actual fun setDailySummaryNotification(config: DailySummaryConfig) {
+    actual override fun setDailySummaryNotification(config: DailySummaryConfig) {
         val content = UNMutableNotificationContent().apply {
             setTitle("每日总结")
             setBody("查看今日任务和习惯完成情况")
@@ -131,7 +131,7 @@ actual class NotificationService {
         }
     }
 
-    actual fun cancelDailySummaryNotification() {
+    actual override fun cancelDailySummaryNotification() {
         notificationCenter.removePendingNotificationRequestsWithIdentifiers(
             identifiers = listOf("DAILY_SUMMARY"),
         )
@@ -139,21 +139,21 @@ actual class NotificationService {
 
     // ===== 即将到期实时更新（iOS 不支持，no-op）=====
 
-    actual fun setUpcomingLiveUpdate(config: UpcomingLiveUpdateConfig) {
+    actual override fun setUpcomingLiveUpdate(config: UpcomingLiveUpdateConfig) {
         // iOS 不支持前台服务实时更新，no-op
     }
 
-    actual fun cancelUpcomingLiveUpdate(taskUid: String) {
+    actual override fun cancelUpcomingLiveUpdate(taskUid: String) {
         // iOS 不支持前台服务实时更新，no-op
     }
 
     // ===== 通用 =====
 
-    actual fun cancelAll() {
+    actual override fun cancelAll() {
         notificationCenter.removeAllPendingNotificationRequests()
     }
 
-    actual fun refreshAll(tasks: List<TaskNotificationInfo>, habits: List<HabitNotificationInfo>) {
+    actual override fun refreshAll(tasks: List<TaskNotificationInfo>, habits: List<HabitNotificationInfo>) {
         // 先取消所有通知
         cancelAll()
 

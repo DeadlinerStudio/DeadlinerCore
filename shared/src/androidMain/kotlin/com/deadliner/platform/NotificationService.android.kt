@@ -14,7 +14,7 @@ import kotlinx.datetime.DayOfWeek
  *
  * 使用 AlarmManager + NotificationManager 实现通知调度。
  */
-actual class NotificationService(private val context: Context) {
+actual class NotificationService(private val context: Context) : NotificationGateway {
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
     private val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
@@ -24,7 +24,7 @@ actual class NotificationService(private val context: Context) {
 
     // ===== 任务通知 =====
 
-    actual fun setTaskNotification(config: TaskNotificationConfig) {
+    actual override fun setTaskNotification(config: TaskNotificationConfig) {
         val intent = createTaskIntent(config.taskUid)
         val pendingIntent = createPendingIntent("TASK_${config.taskUid}", intent)
 
@@ -37,20 +37,20 @@ actual class NotificationService(private val context: Context) {
         )
     }
 
-    actual fun cancelTaskNotification(taskUid: String) {
+    actual override fun cancelTaskNotification(taskUid: String) {
         val intent = createTaskIntent(taskUid)
         val pendingIntent = createPendingIntent("TASK_$taskUid", intent)
         alarmManager.cancel(pendingIntent)
     }
 
-    actual fun cancelAllTaskNotifications() {
+    actual override fun cancelAllTaskNotifications() {
         // Android 无法直接取消所有任务通知，需要逐个取消
         // 简化实现：no-op
     }
 
     // ===== 习惯通知 =====
 
-    actual fun setHabitNotification(config: HabitNotificationConfig) {
+    actual override fun setHabitNotification(config: HabitNotificationConfig) {
         val intent = createHabitIntent(config.habitUid)
         val pendingIntent = createPendingIntent("HABIT_${config.habitUid}", intent)
 
@@ -69,20 +69,20 @@ actual class NotificationService(private val context: Context) {
         )
     }
 
-    actual fun cancelHabitNotification(habitUid: String) {
+    actual override fun cancelHabitNotification(habitUid: String) {
         val intent = createHabitIntent(habitUid)
         val pendingIntent = createPendingIntent("HABIT_$habitUid", intent)
         alarmManager.cancel(pendingIntent)
     }
 
-    actual fun cancelAllHabitNotifications() {
+    actual override fun cancelAllHabitNotifications() {
         // Android 无法直接取消所有习惯通知，需要逐个取消
         // 简化实现：no-op
     }
 
     // ===== 每日统计通知 =====
 
-    actual fun setDailySummaryNotification(config: DailySummaryConfig) {
+    actual override fun setDailySummaryNotification(config: DailySummaryConfig) {
         val intent = createDailySummaryIntent()
         val pendingIntent = createPendingIntent("DAILY_SUMMARY", intent)
 
@@ -101,7 +101,7 @@ actual class NotificationService(private val context: Context) {
         )
     }
 
-    actual fun cancelDailySummaryNotification() {
+    actual override fun cancelDailySummaryNotification() {
         val intent = createDailySummaryIntent()
         val pendingIntent = createPendingIntent("DAILY_SUMMARY", intent)
         alarmManager.cancel(pendingIntent)
@@ -109,7 +109,7 @@ actual class NotificationService(private val context: Context) {
 
     // ===== 即将到期实时更新 =====
 
-    actual fun setUpcomingLiveUpdate(config: UpcomingLiveUpdateConfig) {
+    actual override fun setUpcomingLiveUpdate(config: UpcomingLiveUpdateConfig) {
         // Android 支持前台服务实时更新
         // 简化实现：使用普通通知
         val intent = createTaskIntent(config.taskUid)
@@ -123,7 +123,7 @@ actual class NotificationService(private val context: Context) {
         )
     }
 
-    actual fun cancelUpcomingLiveUpdate(taskUid: String) {
+    actual override fun cancelUpcomingLiveUpdate(taskUid: String) {
         val intent = createTaskIntent(taskUid)
         val pendingIntent = createPendingIntent("UPCOMING_$taskUid", intent)
         alarmManager.cancel(pendingIntent)
@@ -131,11 +131,11 @@ actual class NotificationService(private val context: Context) {
 
     // ===== 通用 =====
 
-    actual fun cancelAll() {
+    actual override fun cancelAll() {
         alarmManager.cancelAll()
     }
 
-    actual fun refreshAll(tasks: List<TaskNotificationInfo>, habits: List<HabitNotificationInfo>) {
+    actual override fun refreshAll(tasks: List<TaskNotificationInfo>, habits: List<HabitNotificationInfo>) {
         // 先取消所有通知
         cancelAll()
 

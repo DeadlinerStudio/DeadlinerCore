@@ -6,6 +6,7 @@ import com.deadliner.domain.habit.HabitPeriod
 import com.deadliner.domain.habit.HabitRecordStatus
 import com.deadliner.domain.habit.HabitStatus
 import com.deadliner.platform.PlatformIdentity
+import com.deadliner.service.NotificationOrchestrator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,6 +30,7 @@ import kotlinx.datetime.toLocalDateTime
 class HabitListViewModel(
     private val habitRepository: HabitRepository,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob()),
+    private val notificationOrchestrator: NotificationOrchestrator? = null,
 ) {
     // ===== 内存缓存（IO 优化核心）=====
     private val _uiState = MutableStateFlow(HabitListUiState())
@@ -84,6 +86,7 @@ class HabitListViewModel(
                     updatedAt = Clock.System.now().toString(),
                 )
                 habitRepository.create(habit)
+                notificationOrchestrator?.onHabitCreated(habit)
                 // 直接更新内存缓存，无需重新查询 DB
                 _uiState.update { state ->
                     state.copy(
@@ -129,6 +132,7 @@ class HabitListViewModel(
         scope.launch {
             try {
                 habitRepository.delete(uid, Clock.System.now().toString())
+                notificationOrchestrator?.onHabitDeleted(uid)
                 // 从内存缓存中移除
                 _uiState.update { state ->
                     state.copy(

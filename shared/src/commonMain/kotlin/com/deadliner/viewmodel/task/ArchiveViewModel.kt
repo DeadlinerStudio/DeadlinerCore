@@ -3,6 +3,7 @@ package com.deadliner.viewmodel.task
 import com.deadliner.db.repository.TaskRepository
 import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskState
+import com.deadliner.service.NotificationOrchestrator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,6 +25,7 @@ import kotlinx.datetime.Clock
 class ArchiveViewModel(
     private val taskRepository: TaskRepository,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob()),
+    private val notificationOrchestrator: NotificationOrchestrator? = null,
 ) {
     // ===== 内存缓存 =====
     private val _uiState = MutableStateFlow(ArchiveUiState())
@@ -61,6 +63,7 @@ class ArchiveViewModel(
             try {
                 val result = taskRepository.applyAction(uid, com.deadliner.domain.task.TaskAction.UNARCHIVE, Clock.System.now().toString())
                 result.task?.let { task ->
+                    notificationOrchestrator?.onTaskUpdated(task)
                     // 从列表中移除已取消归档的任务
                     _uiState.update { state ->
                         state.copy(
@@ -80,6 +83,7 @@ class ArchiveViewModel(
         scope.launch {
             try {
                 taskRepository.delete(uid, Clock.System.now().toString())
+                notificationOrchestrator?.onTaskDeleted(uid)
                 _uiState.update { state ->
                     state.copy(
                         tasks = state.tasks.filter { it.uid != uid },

@@ -6,6 +6,7 @@ import com.deadliner.domain.category.Category
 import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskState
 import com.deadliner.platform.PlatformIdentity
+import com.deadliner.service.NotificationOrchestrator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,6 +30,7 @@ class TaskEditorViewModel(
     private val categoryRepository: CategoryRepository,
     private val editingTaskUid: String? = null,  // null 表示创建模式
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob()),
+    private val notificationOrchestrator: NotificationOrchestrator? = null,
 ) {
     // ===== 内存缓存 =====
     private val _uiState = MutableStateFlow(TaskEditorUiState())
@@ -136,8 +138,10 @@ class TaskEditorViewModel(
 
                 if (editingTaskUid != null) {
                     taskRepository.update(task)
+                    notificationOrchestrator?.onTaskUpdated(task)
                 } else {
                     taskRepository.create(task)
+                    notificationOrchestrator?.onTaskCreated(task)
                 }
 
                 _uiState.update {

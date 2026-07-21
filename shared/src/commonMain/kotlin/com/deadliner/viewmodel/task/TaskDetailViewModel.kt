@@ -5,6 +5,7 @@ import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskAction
 import com.deadliner.domain.task.TaskSubtask
 import com.deadliner.platform.PlatformIdentity
+import com.deadliner.service.NotificationOrchestrator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,6 +28,7 @@ class TaskDetailViewModel(
     private val taskRepository: TaskRepository,
     private val taskUid: String,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob()),
+    private val notificationOrchestrator: NotificationOrchestrator? = null,
 ) {
     // ===== 内存缓存 =====
     private val _uiState = MutableStateFlow(TaskDetailUiState())
@@ -83,6 +85,7 @@ class TaskDetailViewModel(
             try {
                 val result = taskRepository.applyAction(taskUid, action, Clock.System.now().toString())
                 result.task?.let { task ->
+                    notificationOrchestrator?.onTaskUpdated(task)
                     _uiState.update { it.copy(task = task, error = null) }
                 }
             } catch (e: Exception) {
@@ -108,6 +111,7 @@ class TaskDetailViewModel(
                 )
                 val updatedTask = currentTask.copy(subtasks = currentTask.subtasks + subtask)
                 taskRepository.update(updatedTask)
+                notificationOrchestrator?.onTaskUpdated(updatedTask)
                 _uiState.update { it.copy(task = updatedTask, error = null) }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = e.message) }
@@ -131,6 +135,7 @@ class TaskDetailViewModel(
                 }
                 val updatedTask = currentTask.copy(subtasks = updatedSubtasks)
                 taskRepository.update(updatedTask)
+                notificationOrchestrator?.onTaskUpdated(updatedTask)
                 _uiState.update { it.copy(task = updatedTask, error = null) }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = e.message) }
@@ -145,6 +150,7 @@ class TaskDetailViewModel(
                 val updatedSubtasks = currentTask.subtasks.filter { it.uid != subtaskUid }
                 val updatedTask = currentTask.copy(subtasks = updatedSubtasks)
                 taskRepository.update(updatedTask)
+                notificationOrchestrator?.onTaskUpdated(updatedTask)
                 _uiState.update { it.copy(task = updatedTask, error = null) }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = e.message) }
@@ -157,6 +163,7 @@ class TaskDetailViewModel(
         scope.launch {
             try {
                 taskRepository.delete(taskUid, Clock.System.now().toString())
+                notificationOrchestrator?.onTaskDeleted(taskUid)
                 _uiState.update { it.copy(task = null, error = null) }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = e.message) }
