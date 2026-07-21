@@ -39,6 +39,26 @@ zsh runscript/verifyPhase12Acceptance.sh
 
 It compiles Android, iOS Simulator and macOS sources; links the iOS Simulator framework; runs macOS SQLite/domain tests; verifies SQLDelight migration history; and links the HarmonyOS `ohosArm64` shared library. The current CPF Kotlin/Native toolchain links the iOS framework successfully, but its `iosSimulatorArm64Test` executable fails to link on Xcode 26.5 with an unresolved `_Kotlin_KonanStartStub`. This is documented as a toolchain blocker rather than a passing iOS runtime test.
 
+## Closed-source binary releases
+
+The Lifi implementation remains local and is deliberately excluded from Git. Build
+all client artifacts on a trusted macOS machine, then publish only binaries to a
+**private** GitHub Release:
+
+```bash
+runscript/releaseBinaries.sh v0.2.0
+# Inspect build/releases/v0.2.0, then publish the same artifacts:
+runscript/releaseBinaries.sh v0.2.0 --upload
+```
+
+The generated release contains an Android AAR, an Apple XCFramework ZIP, the
+HarmonyOS arm64 shared library, and SHA-256 checksums in `manifest.json` and
+`checksums-sha256.txt`. The upload command refuses public repositories to avoid
+exposing closed-source binaries. iOS consumers can use the XCFramework ZIP from
+a binary-only Swift Package; Android can consume the AAR directly or through a
+private Maven registry; HarmonyOS should download the matching `.so` and verify
+its checksum before copying it into its native-library directory.
+
 ## Boundaries
 
 - `shared` owns the domain contract now, then schema, queries, repositories, changelog and LWW synchronization orchestration.
