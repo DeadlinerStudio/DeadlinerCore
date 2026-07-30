@@ -20,3 +20,8 @@ target
 **/*.rs.bk
 *.pdb
 **/mutants.out*/
+
+# === Lifi AI Core 闭源实现 ===
+shared/src/commonMain/kotlin/com/deadliner/lifi/
+shared/src/iosMain/kotlin/com/deadliner/lifi/
+shared/src/commonMain/resources/skills/

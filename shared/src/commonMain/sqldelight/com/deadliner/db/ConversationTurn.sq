@@ -1,0 +1,15 @@
+selectRecent:
+SELECT role, content, created_at
+FROM conversation_turn
+ORDER BY created_at DESC
+LIMIT ?;
+
+insertTurn:
+INSERT INTO conversation_turn (role, content, created_at)
+VALUES (?, ?, ?);
+
+deleteAll:
+DELETE FROM conversation_turn;
+
+deleteOlderThan:
+DELETE FROM conversation_turn WHERE created_at < ?;

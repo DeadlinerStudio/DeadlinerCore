@@ -28,6 +28,56 @@ class MemoryRepository(
         }
     }
 
+    fun replaceAll(fragments: List<MemoryFragment>) {
+        database.transaction {
+            val existing = list()
+            for (old in existing) {
+                database.memoryQueries.softDeleteMemory(currentTimestamp(), old.uid)
+            }
+            for (fragment in fragments) {
+                database.memoryQueries.insertMemory(
+                    fragment.uid, fragment.content, fragment.category,
+                    fragment.createdAt, fragment.importance.toLong(),
+                    fragment.updatedAt, fragment.isDeleted.asLong(),
+                )
+                database.memoryQueries.updateMemory(
+                    fragment.content, fragment.category, fragment.importance.toLong(),
+                    fragment.updatedAt, fragment.isDeleted.asLong(), fragment.uid,
+                )
+            }
+        }
+    }
+
+    fun appendConversationTurn(role: String, content: String) {
+        val truncated = content.take(MAX_CONVERSATION_MESSAGE_CHARS)
+        database.conversationTurnQueries.insertTurn(role, truncated, currentTimestamp())
+        pruneConversationHistory()
+    }
+
+    fun getRecentConversationContext(limit: Int): String {
+        val turns = database.conversationTurnQueries
+            .selectRecent(limit.toLong())
+            .executeAsList()
+        if (turns.isEmpty()) return ""
+        return turns.reversed().joinToString("\n") { (role, content, _) ->
+            "[$role] $content"
+        }
+    }
+
+    private fun pruneConversationHistory() {
+        val count = database.conversationTurnQueries
+            .selectRecent(MAX_CONVERSATION_TURNS.toLong() + 100)
+            .executeAsList()
+            .size
+        if (count > MAX_CONVERSATION_TURNS) {
+            val cutoff = database.conversationTurnQueries
+                .selectRecent(MAX_CONVERSATION_TURNS.toLong())
+                .executeAsList()
+                .lastOrNull()?.created_at ?: return
+            database.conversationTurnQueries.deleteOlderThan(cutoff)
+        }
+    }
+
     private fun save(fragment: MemoryFragment, operation: ChangeOperation) {
         database.transaction {
             database.memoryQueries.insertMemory(
@@ -45,4 +95,12 @@ class MemoryRepository(
     private fun toMemory(
         uid: String, content: String, category: String, createdAt: String, importance: Long, updatedAt: String, isDeleted: Long,
     ) = MemoryFragment(uid, content, category, createdAt, importance.toInt(), updatedAt, isDeleted.asBoolean())
+
+    companion object {
+        private const val MAX_CONVERSATION_TURNS = 24
+        private const val MAX_CONVERSATION_MESSAGE_CHARS = 400
+    }
 }
+
+private fun currentTimestamp(): String =
+    kotlinx.datetime.Clock.System.now().toString()

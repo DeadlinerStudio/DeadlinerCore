@@ -1,0 +1,9 @@
+-- v2 -> v3: LiFi conversation history became persisted KMP state.
+CREATE TABLE conversation_turn (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_conversation_created ON conversation_turn(created_at);

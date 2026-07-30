@@ -5,6 +5,7 @@ sqldelight = "2.2.1-0.3.0"
 kotlinx-serialization = "1.9.1-0.3.0"
 kotlinx-datetime = "0.7.1-0.3.0"
 kotlinx-coroutines = "1.10.2-0.3.0"
+ktor = "3.3.3-0.3.0"
 androidx-core = "1.19.0"
 androidx-work = "2.11.2"
 
@@ -16,6 +17,13 @@ sqldelight-native-driver = { module = "app.cash.sqldelight:native-driver", versi
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
+ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
+ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
+ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
+ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
+ktor-client-curl = { module = "io.ktor:ktor-client-curl", version.ref = "ktor" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 androidx-core = { module = "androidx.core:core", version.ref = "androidx-core" }
 androidx-work-runtime = { module = "androidx.work:work-runtime", version.ref = "androidx-work" }

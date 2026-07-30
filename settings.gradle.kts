@@ -7,6 +7,8 @@ pluginManagement {
                 includeGroupByRegex("org\\.jetbrains\\.kotlinx(\\..*)?")
                 includeGroupByRegex("app\\.cash\\.sqldelight(\\..*)?")
                 includeGroupByRegex("co\\.touchlab(\\..*)?")
+                includeGroupByRegex("io\\.ktor(\\..*)?")
+                includeGroupByRegex("com\\.squareup\\.okio(\\..*)?")
             }
         }
         maven("https://maven.eazytec-cloud.com/nexus/repository/maven-releases/") {
@@ -15,6 +17,8 @@ pluginManagement {
                 includeGroupByRegex("org\\.jetbrains\\.kotlinx(\\..*)?")
                 includeGroupByRegex("app\\.cash\\.sqldelight(\\..*)?")
                 includeGroupByRegex("co\\.touchlab(\\..*)?")
+                includeGroupByRegex("io\\.ktor(\\..*)?")
+                includeGroupByRegex("com\\.squareup\\.okio(\\..*)?")
             }
         }
         maven("https://maven.aliyun.com/repository/gradle-plugin")
@@ -37,6 +41,8 @@ dependencyResolutionManagement {
                 includeGroupByRegex("org\\.jetbrains\\.kotlinx(\\..*)?")
                 includeGroupByRegex("app\\.cash\\.sqldelight(\\..*)?")
                 includeGroupByRegex("co\\.touchlab(\\..*)?")
+                includeGroupByRegex("io\\.ktor(\\..*)?")
+                includeGroupByRegex("com\\.squareup\\.okio(\\..*)?")
             }
         }
         maven("https://maven.eazytec-cloud.com/nexus/repository/maven-releases/") {
@@ -45,6 +51,8 @@ dependencyResolutionManagement {
                 includeGroupByRegex("org\\.jetbrains\\.kotlinx(\\..*)?")
                 includeGroupByRegex("app\\.cash\\.sqldelight(\\..*)?")
                 includeGroupByRegex("co\\.touchlab(\\..*)?")
+                includeGroupByRegex("io\\.ktor(\\..*)?")
+                includeGroupByRegex("com\\.squareup\\.okio(\\..*)?")
             }
         }
         maven("https://maven.aliyun.com/repository/google")

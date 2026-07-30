@@ -85,7 +85,7 @@ fi
 release_dir="$project_dir/build/releases/$tag"
 staging_dir="${release_dir}.incomplete"
 android_aar="$project_dir/shared/build/outputs/aar/shared-release.aar"
-xcframework_dir="$project_dir/shared/build/XCFrameworks/release/shared.xcframework"
+xcframework_dir="$project_dir/shared/build/XCFrameworks/release/Shared.xcframework"
 ohos_library="$project_dir/shared/build/bin/ohosArm64/releaseShared/libDeadlinerCore.so"
 
 if [[ -e "$release_dir" ]]; then

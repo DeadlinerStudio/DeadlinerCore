@@ -10,6 +10,8 @@ import com.deadliner.db.repository.TaskRepository
 import com.deadliner.db.repository.UserProfileRepository
 import com.deadliner.sync.ChangeLogSyncFacade
 import com.deadliner.sync.LegacyV2SyncFacade
+import com.deadliner.sync.WebDavChangeLogSyncFacade
+import com.deadliner.sync.WebDavV2SyncFacade
 import com.deadliner.platform.NotificationService
 import com.deadliner.service.NotificationOrchestrator
 
@@ -28,7 +30,10 @@ class DeadlinerDatabase private constructor(
     val profiles = UserProfileRepository(database, changeLogRepository)
     val changeLog = changeLogRepository
     val sync = ChangeLogSyncFacade(database, changeLogRepository)
+    val webDavChangeLogSync = WebDavChangeLogSyncFacade(sync)
     val legacyV2Sync = LegacyV2SyncFacade(database)
+    /** Cross-platform WebDAV V2 façade; it does not alter business schema or payload format. */
+    val webDavV2Sync = WebDavV2SyncFacade(legacyV2Sync)
 
     fun createNotificationOrchestrator(notificationService: NotificationService): NotificationOrchestrator =
         NotificationOrchestrator(notificationService)

@@ -138,7 +138,15 @@ CREATE INDEX idx_habit_category ON habit(is_deleted, category_uid, sort_order);
 CREATE INDEX idx_habit_record_habit ON habit_record(habit_uid, is_deleted, occurred_on);
 CREATE INDEX idx_habit_schedule_habit ON habit_schedule_item(habit_uid, is_deleted, due_at);
 CREATE INDEX idx_capture_consumed ON capture_item(is_deleted, is_consumed, created_at);
+CREATE TABLE conversation_turn (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX idx_memory_created ON memory_fragment(is_deleted, created_at);
+CREATE INDEX idx_conversation_created ON conversation_turn(created_at);
 CREATE INDEX idx_changelog_synced ON changelog(synced, server_timestamp);
 CREATE INDEX idx_changelog_record ON changelog(table_name, record_id);
 CREATE INDEX idx_legacy_v2_version_kind ON legacy_v2_version(entity_kind);

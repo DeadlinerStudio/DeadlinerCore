@@ -18,7 +18,10 @@ android {
 
 kotlin {
     androidTarget()
-    val xcf = XCFramework()
+    // Keep the outer XCFramework name aligned with the inner framework
+    // baseName. Xcode rejects a lowercase `shared.xcframework` containing
+    // `Shared.framework` when reassembling a release archive.
+    val xcf = XCFramework("Shared")
     listOf(iosX64(), iosArm64(), iosSimulatorArm64()).forEach { target ->
         target.binaries.framework {
             baseName = "Shared"
@@ -63,25 +66,45 @@ kotlin {
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlinx.datetime)
             implementation(libs.kotlinx.coroutines.core)
+            // WebDAV protocol code is shared. Platform source sets contribute
+            // only the Ktor engine (Darwin, OkHttp, Curl).
+            implementation(libs.ktor.client.core)
         }
         androidMain.dependencies {
             implementation(libs.sqldelight.android.driver)
             implementation(libs.androidx.core)
             implementation(libs.androidx.work.runtime)
+            implementation(libs.ktor.client.core)
+            implementation(libs.ktor.client.content.negotiation)
+            implementation(libs.ktor.serialization.kotlinx.json)
+            implementation(libs.ktor.client.okhttp)
         }
         iosMain.dependencies {
             implementation(libs.sqldelight.native.driver)
+            implementation(libs.ktor.client.core)
+            implementation(libs.ktor.client.content.negotiation)
+            implementation(libs.ktor.serialization.kotlinx.json)
+            implementation(libs.ktor.client.darwin)
         }
         macosArm64Main.dependencies {
             implementation(libs.sqldelight.native.driver)
+            implementation(libs.ktor.client.core)
+            implementation(libs.ktor.client.content.negotiation)
+            implementation(libs.ktor.serialization.kotlinx.json)
+            implementation(libs.ktor.client.darwin)
         }
         val ohosArm64Main by getting {
             dependencies {
                 implementation(libs.sqldelight.native.driver)
+                implementation(libs.ktor.client.core)
+                implementation(libs.ktor.client.content.negotiation)
+                implementation(libs.ktor.serialization.kotlinx.json)
+                implementation(libs.ktor.client.curl)
             }
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+            implementation(libs.ktor.client.mock)
         }
         macosArm64Test.dependencies {
             implementation(libs.kotlin.test)
