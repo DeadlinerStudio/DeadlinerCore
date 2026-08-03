@@ -53,6 +53,10 @@ kotlin {
                 "-lsqlite3",
                 "-lz",
                 "-lclang_rt.builtins",
+                // Kotlin/Native's OHOS shared runtime records a relocation for `main`.
+                // NAPI libraries have no executable entry point, so alias it to a stable bridge
+                // export at link time instead of relying on the host ArkTS process.
+                "--defsym=main=deadliner_persistence_bridge_version",
             )
             linkTaskProvider.configure {
                 dependsOn(extractOhosSqliteStaticLibraries)

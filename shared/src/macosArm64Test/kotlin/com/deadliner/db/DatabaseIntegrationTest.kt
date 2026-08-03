@@ -14,6 +14,13 @@ import com.deadliner.domain.task.TaskAction
 import com.deadliner.domain.task.TaskActionOutcome
 import com.deadliner.domain.task.TaskSubtask
 import com.deadliner.model.ChangeOperation
+import com.deadliner.sync.ChangeLogSyncPayload
+import com.deadliner.sync.snapshot.SnapshotV3EntityVersion
+import com.deadliner.sync.snapshot.SnapshotV3Root
+import com.deadliner.sync.snapshot.SnapshotV3TaskItem
+import com.deadliner.sync.snapshot.SnapshotV3Version
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -24,6 +31,46 @@ import platform.Foundation.NSTemporaryDirectory
 import platform.posix.remove
 
 class DatabaseIntegrationTest {
+    @Test
+    fun snapshotRestoresTaskWhenIncrementalLogDoesNotContainIt() {
+        val path = "${NSTemporaryDirectory()}deadliner-snapshot-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            val task = Task("task.recovered", "Recovered from full snapshot", createdAt = NOW, updatedAt = NOW)
+            val payload = ChangeLogSyncPayload(
+                snapshot = SnapshotV3Root(
+                    version = SnapshotV3Version(NOW, "remote-device"),
+                    tasks = listOf(SnapshotV3TaskItem(task.uid, SnapshotV3EntityVersion(NOW, 0, "remote-device"), false, task)),
+                ),
+                changes = emptyList(),
+            )
+
+            val result = database.sync.mergeRemotePayload(Json.encodeToString(payload))
+
+            assertEquals(1, result.remoteApplied)
+            assertEquals(task, database.tasks.find(task.uid))
+            assertTrue(Json.decodeFromString<ChangeLogSyncPayload>(result.payload).snapshot?.tasks?.any { it.uid == task.uid } == true)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun legacyChangeOnlyPayloadRemainsReadable() {
+        val path = "${NSTemporaryDirectory()}deadliner-legacy-payload-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            val result = database.sync.mergeRemotePayload("""{"formatVersion":1,"changes":[]}""")
+
+            assertEquals(0, result.remoteApplied)
+            assertTrue(Json.decodeFromString<ChangeLogSyncPayload>(result.payload).snapshot != null)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
     @Test
     fun taskActionsUseSharedStateMachineAndWriteOneUpdatedAggregate() {
         val path = "${NSTemporaryDirectory()}deadliner-action-${NSUUID().UUIDString}.db"

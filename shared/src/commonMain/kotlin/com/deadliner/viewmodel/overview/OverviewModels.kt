@@ -2,11 +2,13 @@ package com.deadliner.viewmodel.overview
 
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.task.Task
+import kotlinx.serialization.Serializable
 
 /**
  * Kept as a compatibility projection for existing Android and HarmonyOS callers.
  * New clients should render [OverviewSummary] and the detailed metric collections.
  */
+@Serializable
 data class HabitProgress(
     val habit: Habit,
     val completedToday: Int,
@@ -17,6 +19,7 @@ data class HabitProgress(
 /**
  * Kept as a compatibility projection for existing Android and HarmonyOS callers.
  */
+@Serializable
 data class OverviewStats(
     val activeTasks: Int = 0,
     val completedTasks: Int = 0,
@@ -28,6 +31,7 @@ data class OverviewStats(
 )
 
 /** Platform-neutral state consumed by the Overview screens on all clients. */
+@Serializable
 data class OverviewUiState(
     val stats: OverviewStats = OverviewStats(),
     val summary: OverviewSummary = OverviewSummary(),
@@ -44,6 +48,7 @@ data class OverviewUiState(
     val error: String? = null,
 )
 
+@Serializable
 data class OverviewSummary(
     val completedToday: Int = 0,
     val pendingDueFromNow: Int = 0,
@@ -51,6 +56,7 @@ data class OverviewSummary(
     val activeAbandoned: Int = 0,
 )
 
+@Serializable
 data class OverviewHistory(
     val completed: Int = 0,
     val pending: Int = 0,
@@ -58,6 +64,7 @@ data class OverviewHistory(
     val overdue: Int = 0,
 )
 
+@Serializable
 enum class OverviewCompletionPeriod {
     OVERNIGHT,
     MORNING,
@@ -76,6 +83,7 @@ internal fun overviewCompletionPeriods(): List<OverviewCompletionPeriod> = listO
     OverviewCompletionPeriod.EVENING,
 )
 
+@Serializable
 data class OverviewCompletionBucket(
     val period: OverviewCompletionPeriod,
     val completedCount: Int,
@@ -86,6 +94,7 @@ data class OverviewCompletionBucket(
 }
 
 /** `date` is an ISO-8601 local date (yyyy-MM-dd), never a localized label. */
+@Serializable
 data class OverviewDailyStat(
     val date: String,
     val completedCount: Int,
@@ -93,6 +102,7 @@ data class OverviewDailyStat(
 )
 
 /** `monthStart` is an ISO-8601 local date for the first day of the month. */
+@Serializable
 data class OverviewMonthlyStat(
     val monthStart: String,
     val totalCount: Int,
@@ -100,16 +110,19 @@ data class OverviewMonthlyStat(
     val overdueCompletedCount: Int,
 )
 
+@Serializable
 data class OverviewWeeklyStat(
     val weekStart: String,
     val completedCount: Int,
 )
 
+@Serializable
 data class OverviewContributionDay(
     val date: String,
     val completedCount: Int,
 )
 
+@Serializable
 data class OverviewLastMonth(
     val monthStart: String? = null,
     val daily: List<OverviewDailyStat> = emptyList(),
@@ -117,6 +130,7 @@ data class OverviewLastMonth(
     val completedTaskTitles: List<String> = emptyList(),
 )
 
+@Serializable
 data class OverviewMonthlyMetrics(
     val totalTasks: Int = 0,
     val completedTasks: Int = 0,

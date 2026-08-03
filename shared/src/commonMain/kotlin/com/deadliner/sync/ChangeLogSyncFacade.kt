@@ -4,6 +4,7 @@ import com.deadliner.db.AppDatabase
 import com.deadliner.db.repository.ChangeLogRepository
 import com.deadliner.db.repository.asLong
 import com.deadliner.domain.category.Category
+import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitRecord
 import com.deadliner.domain.habit.HabitScheduleItem
@@ -12,6 +13,9 @@ import com.deadliner.domain.task.TaskState
 import com.deadliner.domain.task.TaskSubtask
 import com.deadliner.model.ChangeLogEntry
 import com.deadliner.model.ChangeOperation
+import com.deadliner.sync.snapshot.SnapshotV3Root
+import com.deadliner.sync.snapshot.SnapshotV3Store
+import com.deadliner.sync.snapshot.SnapshotV3Validator
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -27,13 +31,17 @@ class ChangeLogSyncFacade(
     private val changeLog: ChangeLogRepository,
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
+    private val snapshotStore = SnapshotV3Store(database, changeLog, json)
+
     fun mergeRemotePayload(remotePayload: String?): ChangeLogSyncMergeResult {
         val pending = changeLog.pending()
-        val remote = try {
+        val remotePayloadModel = try {
             remotePayload
                 ?.takeIf(String::isNotBlank)
-                ?.let { json.decodeFromString<ChangeLogSyncPayload>(it).changes }
-                .orEmpty()
+                ?.let { json.decodeFromString<ChangeLogSyncPayload>(it).also { payload ->
+                    payload.snapshot?.let(SnapshotV3Validator::requireValid)
+                } }
+                ?: ChangeLogSyncPayload()
         } catch (error: Exception) {
             return ChangeLogSyncMergeResult(
                 payload = "",
@@ -45,11 +53,23 @@ class ChangeLogSyncFacade(
         }
         var applied = 0
         var ignored = 0
+        // A snapshot repairs an incomplete/pruned log before newer incremental changes are applied.
+        val remote = remotePayloadModel.snapshot?.let(snapshotStore::asChangeEntries).orEmpty() + remotePayloadModel.changes
 
         remote.sortedWith(compareBy(::tableOrder, ChangeLogEntry::clientTimestamp, ChangeLogEntry::id)).forEach { entry ->
             val existing = changeLog.latestFor(entry.tableName, entry.recordId)
             if (LastWriteWinsConflictResolver.shouldApply(entry, existing)) {
-                applyRemote(entry)
+                try {
+                    applyRemote(entry)
+                } catch (error: Throwable) {
+                    return ChangeLogSyncMergeResult(
+                        payload = "",
+                        pendingIdsPayload = "[]",
+                        remoteApplied = applied,
+                        remoteIgnored = ignored,
+                        failureMessage = remoteApplyFailureMessage(entry, error),
+                    )
+                }
                 applied++
             } else {
                 changeLog.recordRemote(entry)
@@ -63,7 +83,7 @@ class ChangeLogSyncFacade(
             .sortedWith(compareBy(ChangeLogEntry::clientTimestamp, ChangeLogEntry::id))
 
         return ChangeLogSyncMergeResult(
-            payload = json.encodeToString(ChangeLogSyncPayload(changes = merged)),
+            payload = json.encodeToString(ChangeLogSyncPayload(snapshot = snapshotStore.export(), changes = merged)),
             pendingIdsPayload = json.encodeToString(pending.map(ChangeLogEntry::id)),
             remoteApplied = applied,
             remoteIgnored = ignored,
@@ -84,6 +104,9 @@ class ChangeLogSyncFacade(
                 "habit" -> applyHabit(entry)
                 "habit_record" -> applyHabitRecord(entry)
                 "habit_schedule_item" -> applyHabitSchedule(entry)
+                "capture_item" -> applyCapture(entry)
+                "memory_fragment" -> applyMemory(entry)
+                "user_profile" -> applyUserProfile(entry)
             }
             changeLog.recordRemote(entry)
         }
@@ -135,6 +158,7 @@ class ChangeLogSyncFacade(
     }
 
     private fun saveTask(task: Task) {
+        ensureCategoryReference(task.categoryUid, task.updatedAt)
         database.taskQueries.insertTask(
             task.uid, task.title, task.note, task.startAt, task.dueAt, task.state.persistedValue(), task.completedAt,
             task.categoryUid, task.isStarred.asLong(), task.calendarEventId, task.createdAt, task.updatedAt, task.isDeleted.asLong(),
@@ -161,6 +185,7 @@ class ChangeLogSyncFacade(
             return
         }
         val habit = entry.document<Habit>() ?: return
+        ensureCategoryReference(habit.categoryUid, habit.updatedAt)
         database.habitQueries.insertHabit(
             habit.uid, habit.name, habit.description, habit.color?.toLong(), habit.iconKey, habit.categoryUid,
             habit.period.name, habit.timesPerPeriod.toLong(), habit.goalType.name, habit.totalTarget?.toLong(), habit.status.name,
@@ -203,10 +228,83 @@ class ChangeLogSyncFacade(
         )
     }
 
+    private fun applyCapture(entry: ChangeLogEntry) {
+        if (entry.operation == ChangeOperation.DELETE) {
+            database.captureQueries.softDeleteCapture(remoteUpdatedAt(), entry.recordId)
+            return
+        }
+        val capture = entry.document<CaptureItem>() ?: return
+        database.captureQueries.insertCapture(capture.uid, capture.text, capture.source.name, capture.createdAt, capture.updatedAt, capture.isConsumed.asLong(), capture.isDeleted.asLong())
+        database.captureQueries.updateCapture(capture.text, capture.source.name, capture.updatedAt, capture.isConsumed.asLong(), capture.isDeleted.asLong(), capture.uid)
+    }
+
+    private fun applyMemory(entry: ChangeLogEntry) {
+        if (entry.operation == ChangeOperation.DELETE) {
+            database.memoryQueries.softDeleteMemory(remoteUpdatedAt(), entry.recordId)
+            return
+        }
+        val memory = entry.document<com.deadliner.domain.memory.MemoryFragment>() ?: return
+        database.memoryQueries.insertMemory(memory.uid, memory.content, memory.category, memory.createdAt, memory.importance.toLong(), memory.updatedAt, memory.isDeleted.asLong())
+        database.memoryQueries.updateMemory(memory.content, memory.category, memory.importance.toLong(), memory.updatedAt, memory.isDeleted.asLong(), memory.uid)
+    }
+
+    private fun applyUserProfile(entry: ChangeLogEntry) {
+        if (entry.operation == ChangeOperation.DELETE) {
+            database.userProfileQueries.softDeleteUserProfile(remoteUpdatedAt(), entry.recordId)
+            return
+        }
+        val profile = entry.document<com.deadliner.domain.account.UserProfile>() ?: return
+        database.userProfileQueries.insertUserProfile(profile.uid, profile.nickname, profile.avatarFileName, profile.tier.name, profile.createdAt, profile.updatedAt, profile.isDeleted.asLong())
+        database.userProfileQueries.updateUserProfile(profile.nickname, profile.avatarFileName, profile.tier.name, profile.updatedAt, profile.isDeleted.asLong(), profile.uid)
+    }
+
     private inline fun <reified T> ChangeLogEntry.document(): T? =
         changedFields?.let { json.decodeFromJsonElement<T>(it) }
 
     private fun remoteUpdatedAt(): String = Clock.System.now().toString()
+
+    /**
+     * Category UI is intentionally absent on HarmonyOS during the migration, but tasks and
+     * habits must retain the category UID received from iOS. A historical category can predate
+     * the changelog blob, so create a local non-changelog placeholder until its authoritative
+     * category entry arrives. This preserves the relationship without manufacturing a local
+     * change that could overwrite iOS metadata.
+     */
+    private fun ensureCategoryReference(categoryUid: String?, timestamp: String) {
+        if (categoryUid == null) return
+        database.categoryQueries.insertCategory(
+            categoryUid,
+            "未命名分类",
+            "folder",
+            "#808080",
+            false.asLong(),
+            Int.MAX_VALUE.toLong(),
+            timestamp,
+            timestamp,
+            false.asLong(),
+        )
+    }
+
+    private fun remoteApplyFailureMessage(entry: ChangeLogEntry, error: Throwable): String {
+        val reference = when (entry.tableName) {
+            "task_subtask" -> entry.document<TaskSubtask>()?.taskUid?.let { "task/$it" }
+            "habit_record" -> entry.document<HabitRecord>()?.habitUid?.let { "habit/$it" }
+            "habit_schedule_item" -> entry.document<HabitScheduleItem>()?.habitUid?.let { "habit/$it" }
+            else -> null
+        }
+        return buildString {
+            append("Failed to apply remote ")
+            append(entry.tableName)
+            append('/')
+            append(entry.recordId)
+            if (reference != null) {
+                append("; required parent ")
+                append(reference)
+            }
+            append(": ")
+            append(error.message ?: error::class.simpleName ?: "unknown SQLite failure")
+        }
+    }
 
     private fun tableOrder(entry: ChangeLogEntry): Int = when (entry.tableName) {
         "category" -> 0
@@ -234,8 +332,9 @@ class ChangeLogSyncFacade(
 
 @Serializable
 data class ChangeLogSyncPayload(
-    val formatVersion: Int = 1,
-    val changes: List<ChangeLogEntry>,
+    val formatVersion: Int = 2,
+    val snapshot: SnapshotV3Root? = null,
+    val changes: List<ChangeLogEntry> = emptyList(),
 )
 
 data class ChangeLogSyncMergeResult(

@@ -2,6 +2,10 @@ selectForHabit:
 SELECT uid, habit_uid, due_at, state, created_at, updated_at, is_deleted
 FROM habit_schedule_item WHERE habit_uid = ? AND is_deleted = 0 ORDER BY due_at;
 
+selectAllIncludingDeleted:
+SELECT uid, habit_uid, due_at, state, created_at, updated_at, is_deleted
+FROM habit_schedule_item ORDER BY habit_uid, due_at;
+
 insertHabitSchedule:
 INSERT OR IGNORE INTO habit_schedule_item (uid, habit_uid, due_at, state, created_at, updated_at, is_deleted)
 VALUES (?, ?, ?, ?, ?, ?, ?);

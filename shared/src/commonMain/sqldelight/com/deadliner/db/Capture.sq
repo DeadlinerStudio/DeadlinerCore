@@ -6,6 +6,10 @@ selectAll:
 SELECT uid, text, source, created_at, updated_at, is_consumed, is_deleted FROM capture_item
 WHERE is_deleted = 0 ORDER BY created_at DESC;
 
+selectAllIncludingDeleted:
+SELECT uid, text, source, created_at, updated_at, is_consumed, is_deleted FROM capture_item
+ORDER BY created_at DESC;
+
 selectByUid:
 SELECT uid, text, source, created_at, updated_at, is_consumed, is_deleted FROM capture_item
 WHERE uid = ?;

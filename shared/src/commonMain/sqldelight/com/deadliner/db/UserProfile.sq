@@ -2,6 +2,10 @@ selectAll:
 SELECT uid, nickname, avatar_file_name, tier, created_at, updated_at, is_deleted
 FROM user_profile WHERE is_deleted = 0 ORDER BY updated_at DESC;
 
+selectAllIncludingDeleted:
+SELECT uid, nickname, avatar_file_name, tier, created_at, updated_at, is_deleted
+FROM user_profile ORDER BY updated_at DESC;
+
 selectByUid:
 SELECT uid, nickname, avatar_file_name, tier, created_at, updated_at, is_deleted
 FROM user_profile WHERE uid = ?;

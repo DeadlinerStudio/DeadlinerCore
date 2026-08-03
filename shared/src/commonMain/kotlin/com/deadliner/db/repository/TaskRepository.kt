@@ -59,6 +59,7 @@ class TaskRepository(
 
     private fun save(task: Task, operation: ChangeOperation) {
         database.transaction {
+            ensureCategoryReference(task.categoryUid, task.updatedAt)
             database.taskQueries.insertTask(
                 task.uid, task.title, task.note, task.startAt, task.dueAt, task.state.persistedValue(),
                 task.completedAt, task.categoryUid, task.isStarred.asLong(), task.calendarEventId,
@@ -82,6 +83,27 @@ class TaskRepository(
             }
             changeLog.appendLocal("task", task.uid, operation, json.encodeToJsonElement(task).jsonObject)
         }
+    }
+
+    /**
+     * Categories are not rendered on HarmonyOS yet, but KMP still retains their identifiers so
+     * that iOS metadata is not lost. A historical task may arrive before the category change-log
+     * entry (or the category may predate changelog sync altogether). Preserve the relationship by
+     * creating a local placeholder; the authoritative category record later updates it in place.
+     */
+    private fun ensureCategoryReference(categoryUid: String?, timestamp: String) {
+        if (categoryUid == null) return
+        database.categoryQueries.insertCategory(
+            categoryUid,
+            "未命名分类",
+            "folder",
+            "#808080",
+            false.asLong(),
+            Int.MAX_VALUE.toLong(),
+            timestamp,
+            timestamp,
+            false.asLong(),
+        )
     }
 
     private fun completedAtAfter(current: Task, target: TaskState, occurredAt: String): String? = when (target) {

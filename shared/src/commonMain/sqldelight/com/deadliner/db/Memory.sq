@@ -2,6 +2,10 @@ selectAll:
 SELECT uid, content, category, created_at, importance, updated_at, is_deleted
 FROM memory_fragment WHERE is_deleted = 0 ORDER BY created_at DESC;
 
+selectAllIncludingDeleted:
+SELECT uid, content, category, created_at, importance, updated_at, is_deleted
+FROM memory_fragment ORDER BY created_at DESC;
+
 selectByUid:
 SELECT uid, content, category, created_at, importance, updated_at, is_deleted
 FROM memory_fragment WHERE uid = ?;

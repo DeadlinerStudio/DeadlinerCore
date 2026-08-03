@@ -27,7 +27,48 @@ class WebDavV2SyncFacade(
 
     @Throws(Exception::class)
     suspend fun synchronize(transport: SyncBlobTransport): WebDavV2SyncResult {
-        var remote = loadRemotePayloads(transport)
+        return synchronize(transport, loadRemotePayloads(transport))
+    }
+
+    /**
+     * Imports V2 only when this provider already owns at least one legacy
+     * payload. This intentionally performs no collection creation or writes
+     * for new providers, so V2 remains an upgrade path rather than a runtime
+     * protocol choice.
+     */
+    @Throws(Exception::class)
+    suspend fun migrateExistingLegacyPayloads(
+        configuration: WebDavTransportConfiguration,
+    ): WebDavLegacyV2MigrationResult {
+        val transport = WebDavSyncTransport(configuration)
+        return try {
+            migrateExistingLegacyPayloads(transport)
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Throws(Exception::class)
+    suspend fun migrateExistingLegacyPayloads(
+        transport: SyncBlobTransport,
+    ): WebDavLegacyV2MigrationResult {
+        val remote = loadRemotePayloads(transport)
+        if (!remote.hasLegacyPayload) {
+            return WebDavLegacyV2MigrationResult(legacyPayloadFound = false)
+        }
+        val result = synchronize(transport, remote)
+        return WebDavLegacyV2MigrationResult(
+            legacyPayloadFound = true,
+            remoteApplied = result.remoteApplied,
+            remoteIgnored = result.remoteIgnored,
+        )
+    }
+
+    private suspend fun synchronize(
+        transport: SyncBlobTransport,
+        initialRemote: V2RemotePayloads,
+    ): WebDavV2SyncResult {
+        var remote = initialRemote
         var merge = merge(remote)
 
         try {
@@ -38,10 +79,7 @@ class WebDavV2SyncFacade(
             upload(transport, merge, remote)
         }
 
-        return WebDavV2SyncResult(
-            remoteApplied = merge.remoteApplied,
-            remoteIgnored = merge.remoteIgnored,
-        )
+        return WebDavV2SyncResult(merge.remoteApplied, merge.remoteIgnored)
     }
 
     private fun merge(remote: V2RemotePayloads): LegacyV2SyncMergeResult {
@@ -103,7 +141,23 @@ private data class V2RemotePayloads(
     val category: V2RemotePayload,
 )
 
+private val V2RemotePayloads.hasLegacyPayload: Boolean
+    get() = hasLegacyV2Payload(task.payload, habit.payload, category.payload)
+
+/** Kept separate so all platforms use the same definition of a legacy provider. */
+internal fun hasLegacyV2Payload(
+    taskPayload: String?,
+    habitPayload: String?,
+    categoryPayload: String?,
+): Boolean = taskPayload != null || habitPayload != null || categoryPayload != null
+
 private data class V2RemotePayload(
     val payload: String?,
     val writeCondition: SyncWriteCondition,
+)
+
+data class WebDavLegacyV2MigrationResult(
+    val legacyPayloadFound: Boolean,
+    val remoteApplied: Int = 0,
+    val remoteIgnored: Int = 0,
 )

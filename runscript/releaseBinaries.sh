@@ -73,6 +73,49 @@ if ! java_version="$("$java_command" -version 2>&1 | awk -F '[\".]' '/version/ {
   printf '%s\n' 'A working JDK 17 or newer is required to package Deadliner Core.' >&2
   exit 1
 fi
+
+# Kotlin/Native may omit the generated Objective-C header and module map from
+# one XCFramework slice even though another slice contains the same generated
+# interface. Xcode then cannot import `Shared` when building a target for that
+# omitted platform (most visibly extensions built for a physical device).
+# The generated interface is platform-independent, so normalize every slice
+# from the canonical header/module map before packaging the release.
+normalize_apple_framework_modules() {
+  local framework_root="$1"
+  local source_header source_module source_info framework platform slice_index=0
+
+  source_header="$(find "$framework_root" -path '*/Shared.framework/Headers/Shared.h' -type f -print -quit)"
+  source_module="$(find "$framework_root" -path '*/Shared.framework/Modules/module.modulemap' -type f -print -quit)"
+  source_info="$(find "$framework_root" -path '*/Shared.framework/Info.plist' -type f -print -quit)"
+  [[ -n "$source_header" ]] || { printf '%s\n' 'No generated Shared.h found in XCFramework.' >&2; exit 1; }
+  [[ -n "$source_module" ]] || { printf '%s\n' 'No generated Shared module map found in XCFramework.' >&2; exit 1; }
+  [[ -n "$source_info" ]] || { printf '%s\n' 'No Shared.framework Info.plist found in XCFramework.' >&2; exit 1; }
+
+  for framework in "$framework_root"/*/Shared.framework; do
+    [[ -d "$framework" ]] || continue
+    mkdir -p "$framework/Headers" "$framework/Modules"
+    [[ -f "$framework/Headers/Shared.h" ]] || cp "$source_header" "$framework/Headers/Shared.h"
+    [[ -f "$framework/Modules/module.modulemap" ]] || cp "$source_module" "$framework/Modules/module.modulemap"
+    if [[ ! -f "$framework/Info.plist" ]]; then
+      cp "$source_info" "$framework/Info.plist"
+      if [[ "$(basename "$(dirname "$framework")")" == *simulator* ]]; then
+        platform="iPhoneSimulator"
+      else
+        platform="iPhoneOS"
+      fi
+      plutil -replace CFBundleSupportedPlatforms -json "[\"$platform\"]" "$framework/Info.plist"
+    fi
+    if [[ -f "$(dirname "$framework")/dSYMs/Shared.framework.dSYM/Contents/Resources/DWARF/Shared" ]]; then
+      /usr/libexec/PlistBuddy \
+        -c "Add :AvailableLibraries:$slice_index:DebugSymbolsPath string dSYMs" \
+        "$framework_root/Info.plist" 2>/dev/null || \
+        /usr/libexec/PlistBuddy \
+          -c "Set :AvailableLibraries:$slice_index:DebugSymbolsPath dSYMs" \
+          "$framework_root/Info.plist"
+    fi
+    slice_index=$((slice_index + 1))
+  done
+}
 if [[ "$java_version" == "1" ]]; then
   java_version="$("$java_command" -version 2>&1 | awk -F '[\".]' '/version/ { print $3; exit }')"
 fi
@@ -138,7 +181,11 @@ for artifact in "$android_aar" "$xcframework_dir" "$ohos_library"; do
   fi
 done
 
+normalize_apple_framework_modules "$xcframework_dir"
+
 cp "$android_aar" "$staging_dir/deadliner-core-android.aar"
+/bin/bash "$project_dir/runscript/verifyAppleDsyms.sh" \
+  "$xcframework_dir" "$staging_dir/apple-dsym-uuids.txt"
 /usr/bin/ditto -c -k --keepParent \
   "$xcframework_dir" "$staging_dir/deadliner-core-ios.xcframework.zip"
 cp "$ohos_library" "$staging_dir/libDeadlinerCore.so"
@@ -153,7 +200,7 @@ built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 (
   cd "$staging_dir"
-  shasum -a 256 deadliner-core-android.aar deadliner-core-ios.xcframework.zip libDeadlinerCore.so > checksums-sha256.txt
+  shasum -a 256 deadliner-core-android.aar deadliner-core-ios.xcframework.zip libDeadlinerCore.so apple-dsym-uuids.txt > checksums-sha256.txt
 )
 
 android_sha="$(awk '$2 == "deadliner-core-android.aar" { print $1 }' "$staging_dir/checksums-sha256.txt")"
@@ -187,6 +234,7 @@ release_files=(
   "$release_dir/deadliner-core-android.aar"
   "$release_dir/deadliner-core-ios.xcframework.zip"
   "$release_dir/libDeadlinerCore.so"
+  "$release_dir/apple-dsym-uuids.txt"
   "$release_dir/checksums-sha256.txt"
   "$release_dir/manifest.json"
 )
