@@ -102,7 +102,9 @@ class DatabaseIntegrationTest {
             database.sync.mergeRemotePayload(Json.encodeToString(payload))
 
             assertEquals(preset, database.categories.find(preset.uid))
-            assertTrue(Json.decodeFromString<ChangeLogSyncPayload>(database.sync.mergeRemotePayload(null).payload).changes.isEmpty())
+            val emitted = database.sync.mergeRemotePayload(null).payload
+            assertTrue(Json.decodeFromString<ChangeLogSyncPayload>(emitted).changes.isEmpty())
+            assertTrue("\"changes\"" !in emitted)
         } finally {
             database.close()
             remove(path)
