@@ -23,18 +23,17 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
 
 /**
- * Transport-neutral bridge for app adapters. Every remote business write and its changelog
- * acknowledgement share one SQL transaction, so iOS never needs direct database access.
+ * Compatibility façade retained for the existing app bridge. V3 transport uses only the typed
+ * full snapshot; the historical change-log repository remains local audit state.
  */
 class ChangeLogSyncFacade(
     private val database: AppDatabase,
     private val changeLog: ChangeLogRepository,
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
-    private val snapshotStore = SnapshotV3Store(database, changeLog, json)
+    private val snapshotStore = SnapshotV3Store(database)
 
     fun mergeRemotePayload(remotePayload: String?): ChangeLogSyncMergeResult {
-        val pending = changeLog.pending()
         val remotePayloadModel = try {
             remotePayload
                 ?.takeIf(String::isNotBlank)
@@ -51,49 +50,28 @@ class ChangeLogSyncFacade(
                 failureMessage = "Invalid KMP sync payload: ${error.message ?: error::class.simpleName}",
             )
         }
-        var applied = 0
-        var ignored = 0
-        // A snapshot repairs an incomplete/pruned log before newer incremental changes are applied.
-        val remote = remotePayloadModel.snapshot?.let(snapshotStore::asChangeEntries).orEmpty() + remotePayloadModel.changes
-
-        remote.sortedWith(compareBy(::tableOrder, ChangeLogEntry::clientTimestamp, ChangeLogEntry::id)).forEach { entry ->
-            val existing = changeLog.latestFor(entry.tableName, entry.recordId)
-            if (LastWriteWinsConflictResolver.shouldApply(entry, existing)) {
-                try {
-                    applyRemote(entry)
-                } catch (error: Throwable) {
-                    return ChangeLogSyncMergeResult(
-                        payload = "",
-                        pendingIdsPayload = "[]",
-                        remoteApplied = applied,
-                        remoteIgnored = ignored,
-                        failureMessage = remoteApplyFailureMessage(entry, error),
-                    )
-                }
-                applied++
-            } else {
-                changeLog.recordRemote(entry)
-                ignored++
+        return try {
+            snapshotStore.merge(remotePayloadModel.snapshot).let { merged ->
+                ChangeLogSyncMergeResult(
+                    payload = json.encodeToString(ChangeLogSyncPayload(snapshot = merged.snapshot)),
+                    pendingIdsPayload = "[]",
+                    remoteApplied = merged.remoteApplied,
+                    remoteIgnored = merged.remoteIgnored,
+                )
             }
+        } catch (error: Throwable) {
+            ChangeLogSyncMergeResult(
+                payload = "",
+                pendingIdsPayload = "[]",
+                remoteApplied = 0,
+                remoteIgnored = 0,
+                failureMessage = "Failed to merge V3 snapshot: ${error.message ?: error::class.simpleName}",
+            )
         }
-
-        val merged = (remote + pending)
-            .associateBy(ChangeLogEntry::id)
-            .values
-            .sortedWith(compareBy(ChangeLogEntry::clientTimestamp, ChangeLogEntry::id))
-
-        return ChangeLogSyncMergeResult(
-            payload = json.encodeToString(ChangeLogSyncPayload(snapshot = snapshotStore.export(), changes = merged)),
-            pendingIdsPayload = json.encodeToString(pending.map(ChangeLogEntry::id)),
-            remoteApplied = applied,
-            remoteIgnored = ignored,
-            failureMessage = null,
-        )
     }
 
-    fun acknowledgePending(pendingIdsPayload: String, serverTimestamp: Long) {
-        changeLog.markSynced(json.decodeFromString(pendingIdsPayload), serverTimestamp)
-    }
+    /** V3 no longer uploads a log, so no local log rows are acknowledged by network success. */
+    fun acknowledgePending(pendingIdsPayload: String, serverTimestamp: Long) = Unit
 
     private fun applyRemote(entry: ChangeLogEntry) {
         database.transaction {
@@ -332,8 +310,9 @@ class ChangeLogSyncFacade(
 
 @Serializable
 data class ChangeLogSyncPayload(
-    val formatVersion: Int = 2,
+    val formatVersion: Int = 3,
     val snapshot: SnapshotV3Root? = null,
+    /** Read-only compatibility field for the unsafe V2 hybrid payload; V3 never consumes it. */
     val changes: List<ChangeLogEntry> = emptyList(),
 )
 

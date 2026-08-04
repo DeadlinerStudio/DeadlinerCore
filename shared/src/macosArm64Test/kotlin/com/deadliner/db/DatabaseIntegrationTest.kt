@@ -16,6 +16,7 @@ import com.deadliner.domain.task.TaskSubtask
 import com.deadliner.model.ChangeOperation
 import com.deadliner.sync.ChangeLogSyncPayload
 import com.deadliner.sync.snapshot.SnapshotV3EntityVersion
+import com.deadliner.sync.snapshot.SnapshotV3CategoryItem
 import com.deadliner.sync.snapshot.SnapshotV3Root
 import com.deadliner.sync.snapshot.SnapshotV3TaskItem
 import com.deadliner.sync.snapshot.SnapshotV3Version
@@ -65,6 +66,43 @@ class DatabaseIntegrationTest {
 
             assertEquals(0, result.remoteApplied)
             assertTrue(Json.decodeFromString<ChangeLogSyncPayload>(result.payload).snapshot != null)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun fullSnapshotKeepsPresetCategoryAndIgnoresHybridChanges() {
+        val path = "${NSTemporaryDirectory()}deadliner-category-snapshot-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            val preset = Category("category.inbox", "收件箱", "tray", "#2563EB", true, 0, NOW, NOW)
+            val payload = ChangeLogSyncPayload(
+                formatVersion = 2,
+                snapshot = SnapshotV3Root(
+                    version = SnapshotV3Version(NOW, "ios"),
+                    categories = listOf(SnapshotV3CategoryItem(preset.uid, SnapshotV3EntityVersion(NOW, 1, "ios"), false, preset)),
+                ),
+                changes = listOf(
+                    com.deadliner.model.ChangeLogEntry(
+                        id = "unsafe-hybrid-change",
+                        tableName = "category",
+                        recordId = preset.uid,
+                        operation = ChangeOperation.UPDATE,
+                        changedFields = kotlinx.serialization.json.buildJsonObject { put("name", kotlinx.serialization.json.JsonPrimitive("占位分类")) },
+                        clientTimestamp = Long.MAX_VALUE,
+                        serverTimestamp = null,
+                        deviceId = "legacy",
+                        synced = true,
+                    ),
+                ),
+            )
+
+            database.sync.mergeRemotePayload(Json.encodeToString(payload))
+
+            assertEquals(preset, database.categories.find(preset.uid))
+            assertTrue(Json.decodeFromString<ChangeLogSyncPayload>(database.sync.mergeRemotePayload(null).payload).changes.isEmpty())
         } finally {
             database.close()
             remove(path)

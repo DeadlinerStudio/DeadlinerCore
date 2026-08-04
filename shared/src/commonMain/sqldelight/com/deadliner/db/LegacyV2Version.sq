@@ -6,3 +6,8 @@ WHERE entity_kind = ? AND entity_uid = ?;
 upsertVersion:
 INSERT OR REPLACE INTO legacy_v2_version(entity_kind, entity_uid, ts, ctr, dev)
 VALUES (?, ?, ?, ?, ?);
+
+selectVersionsForKind:
+SELECT entity_uid, ts, ctr, dev
+FROM legacy_v2_version
+WHERE entity_kind = ?;

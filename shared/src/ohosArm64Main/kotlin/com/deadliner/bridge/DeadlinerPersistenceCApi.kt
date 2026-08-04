@@ -8,7 +8,9 @@ import com.deadliner.sync.WebDavChangeLogSyncOutcome
 import com.deadliner.sync.webdav.WebDavCredentials
 import com.deadliner.sync.webdav.WebDavTransportConfiguration
 import com.deadliner.viewmodel.task.TaskListViewModel
+import com.deadliner.viewmodel.task.TaskListUiState
 import com.deadliner.viewmodel.habit.HabitListViewModel
+import com.deadliner.viewmodel.habit.HabitListUiState
 import com.deadliner.viewmodel.capture.CaptureViewModel
 import com.deadliner.viewmodel.overview.OverviewViewModel
 import com.deadliner.domain.task.Task
@@ -52,6 +54,7 @@ private object PersistenceRuntime {
     private var pendingChangeLogSync: ChangeLogSyncCache? = null
     private var lifiCore: OhosLifiCore? = null
     private var lifiSignature: String? = null
+    private var pendingLifiUtility: LifiUtilityCache? = null
     private val lifiEvents = mutableListOf<CoreEvent>()
 
     fun initialize(directory: String, installationId: String): Int = try {
@@ -62,6 +65,7 @@ private object PersistenceRuntime {
         database = DeadlinerDatabase.create(OhosDatabaseDriverFactory(directory, installationId))
         pendingLegacyV2Merge = null
         pendingChangeLogSync = null
+        pendingLifiUtility = null
         1
     } catch (_: Throwable) {
         database = null
@@ -74,6 +78,7 @@ private object PersistenceRuntime {
         database = null
         pendingLegacyV2Merge = null
         pendingChangeLogSync = null
+        pendingLifiUtility = null
         return 1
     }
 
@@ -99,10 +104,53 @@ private object PersistenceRuntime {
     }
 
     suspend fun extractLifiTasksJson(configPayload: String, text: String): String? = try {
-        require(text.isNotBlank()) { "AI extraction input must not be blank" }
-        bridgeJson.encodeToString(ensureLifiCore(configPayload).extractTasks(text))
+        resolveLifiUtility("tasks", configPayload, text) {
+            bridgeJson.encodeToString(ensureLifiCore(configPayload).extractTasks(text))
+        }
     } catch (_: Throwable) {
         null
+    }
+
+    suspend fun extractLifiHabitsJson(configPayload: String, text: String): String? = try {
+        resolveLifiUtility("habits", configPayload, text) {
+            bridgeJson.encodeToString(ensureLifiCore(configPayload).extractHabits(text))
+        }
+    } catch (_: Throwable) {
+        null
+    }
+
+    suspend fun generateLifiMonthlyAnalysisJson(configPayload: String, requestPayload: String): String? = try {
+        resolveLifiUtility("monthly", configPayload, requestPayload) {
+            val request = bridgeJson.decodeFromString<LifiMonthlyAnalysisRequest>(requestPayload)
+            bridgeJson.encodeToString(
+                ensureLifiCore(configPayload).generateMonthlyAnalysis(
+                    request.monthName,
+                    request.metricsSummary,
+                    request.completedTaskNames,
+                ),
+            )
+        }
+    } catch (_: Throwable) {
+        null
+    }
+
+    fun clearPendingLifiUtility() {
+        pendingLifiUtility = null
+    }
+
+    private suspend fun resolveLifiUtility(
+        operation: String,
+        configPayload: String,
+        requestPayload: String,
+        execute: suspend () -> String,
+    ): String {
+        require(requestPayload.isNotBlank()) { "AI utility input must not be blank" }
+        pendingLifiUtility?.takeIf {
+            it.operation == operation && it.configPayload == configPayload && it.requestPayload == requestPayload
+        }?.let { return it.response }
+        return execute().also { response ->
+            pendingLifiUtility = LifiUtilityCache(operation, configPayload, requestPayload, response)
+        }
     }
 
     fun drainLifiEventsJson(): String = bridgeJson.encodeToString(
@@ -147,6 +195,7 @@ private object PersistenceRuntime {
         lifiCore = null
         lifiSignature = null
         lifiEvents.clear()
+        pendingLifiUtility = null
     }
 
     fun importLegacyV2(taskPayload: String, habitPayload: String): Int = try {
@@ -221,9 +270,8 @@ private object PersistenceRuntime {
     /** Reads the actual KMP task-list ViewModel state; ArkTS receives only its serializable DTO. */
     fun taskListViewModelJson(): String? = try {
         val activeDatabase = database ?: return null
-        val viewModel = TaskListViewModel(activeDatabase.tasks, CoroutineScope(Dispatchers.Default))
-        viewModel.initialize()
-        val state = runBlocking { withTimeout(5_000) { viewModel.uiState.first { !it.isLoading } } }
+        val state = TaskListViewModel(activeDatabase.tasks, CoroutineScope(Dispatchers.Default)).loadNow()
+        check(state.error == null) { state.error ?: "KMP task ViewModel failed" }
         bridgeJson.encodeToString(state.tasks)
     } catch (_: Throwable) {
         null
@@ -238,26 +286,30 @@ private object PersistenceRuntime {
     }
 
     fun createTaskJson(taskPayload: String): String? = mutateTask { activeDatabase ->
-        activeDatabase.tasks.create(bridgeJson.decodeFromString<Task>(taskPayload))
+        TaskListViewModel(activeDatabase.tasks, CoroutineScope(Dispatchers.Default))
+            .saveTaskNow(bridgeJson.decodeFromString(taskPayload))
     }
 
     fun updateTaskJson(taskPayload: String): String? = mutateTask { activeDatabase ->
-        activeDatabase.tasks.update(bridgeJson.decodeFromString<Task>(taskPayload))
+        TaskListViewModel(activeDatabase.tasks, CoroutineScope(Dispatchers.Default))
+            .saveTaskNow(bridgeJson.decodeFromString(taskPayload))
     }
 
     fun applyTaskActionJson(uid: String, actionPayload: String): String? = mutateTask { activeDatabase ->
         val request = bridgeJson.decodeFromString<TaskActionRequest>(actionPayload)
-        activeDatabase.tasks.applyAction(uid, TaskAction.valueOf(request.action), request.occurredAt)
+        TaskListViewModel(activeDatabase.tasks, CoroutineScope(Dispatchers.Default))
+            .applyTaskActionNow(uid, TaskAction.valueOf(request.action), request.occurredAt)
     }
 
     fun deleteTaskJson(uid: String, updatedAt: String): String? = mutateTask { activeDatabase ->
-        activeDatabase.tasks.delete(uid, updatedAt)
+        TaskListViewModel(activeDatabase.tasks, CoroutineScope(Dispatchers.Default)).deleteTaskNow(uid, updatedAt)
     }
 
-    private fun mutateTask(operation: (DeadlinerDatabase) -> Unit): String? = try {
+    private fun mutateTask(operation: (DeadlinerDatabase) -> TaskListUiState): String? = try {
         val activeDatabase = database ?: return null
-        operation(activeDatabase)
-        taskListViewModelJson()
+        val state = operation(activeDatabase)
+        check(state.error == null) { state.error ?: "KMP task ViewModel intent failed" }
+        bridgeJson.encodeToString(state.tasks)
     } catch (_: Throwable) {
         null
     }
@@ -265,39 +317,44 @@ private object PersistenceRuntime {
     /** Reads the KMP HabitListViewModel and supplements it with the repository's record state. */
     fun habitStateJson(): String? = try {
         val activeDatabase = database ?: return null
-        val viewModel = HabitListViewModel(activeDatabase.habits, CoroutineScope(Dispatchers.Default))
-        viewModel.initialize()
-        val state = runBlocking { withTimeout(5_000) { viewModel.uiState.first { !it.isLoading } } }
-        bridgeJson.encodeToString(HabitBridgeState(state.habits, activeDatabase.habits.allRecords()))
+        val state = HabitListViewModel(activeDatabase.habits, CoroutineScope(Dispatchers.Default)).loadNow()
+        check(state.error == null) { state.error ?: "KMP habit ViewModel failed" }
+        bridgeJson.encodeToString(HabitBridgeState(state.habits, state.records))
     } catch (_: Throwable) {
         null
     }
 
     fun createHabitJson(habitPayload: String): String? = mutateHabit { activeDatabase ->
-        activeDatabase.habits.create(bridgeJson.decodeFromString<Habit>(habitPayload))
+        HabitListViewModel(activeDatabase.habits, CoroutineScope(Dispatchers.Default))
+            .saveHabitNow(bridgeJson.decodeFromString(habitPayload))
     }
 
     fun updateHabitJson(habitPayload: String): String? = mutateHabit { activeDatabase ->
-        activeDatabase.habits.update(bridgeJson.decodeFromString<Habit>(habitPayload))
+        HabitListViewModel(activeDatabase.habits, CoroutineScope(Dispatchers.Default))
+            .saveHabitNow(bridgeJson.decodeFromString(habitPayload))
     }
 
     fun applyHabitStatusJson(uid: String, actionPayload: String): String? = mutateHabit { activeDatabase ->
         val request = bridgeJson.decodeFromString<HabitStatusActionRequest>(actionPayload)
-        activeDatabase.habits.applyStatusAction(uid, HabitStatusAction.valueOf(request.action), request.occurredAt)
+        HabitListViewModel(activeDatabase.habits, CoroutineScope(Dispatchers.Default))
+            .applyHabitStatusNow(uid, HabitStatusAction.valueOf(request.action), request.occurredAt)
     }
 
     fun toggleHabitRecordJson(uid: String, recordPayload: String): String? = mutateHabit { activeDatabase ->
         val request = bridgeJson.decodeFromString<HabitRecordActionRequest>(recordPayload)
-        activeDatabase.habits.toggleRecord(uid, request.occurredOn, request.occurredAt)
+        HabitListViewModel(activeDatabase.habits, CoroutineScope(Dispatchers.Default))
+            .toggleHabitRecordNow(uid, request.occurredOn, request.occurredAt)
     }
 
     fun saveHabitRecordJson(recordPayload: String): String? = mutateHabit { activeDatabase ->
-        activeDatabase.habits.saveRecord(bridgeJson.decodeFromString<HabitRecord>(recordPayload))
+        HabitListViewModel(activeDatabase.habits, CoroutineScope(Dispatchers.Default))
+            .saveHabitRecordNow(bridgeJson.decodeFromString(recordPayload))
     }
 
     fun clearHabitRecordsJson(uid: String, recordPayload: String): String? = mutateHabit { activeDatabase ->
         val request = bridgeJson.decodeFromString<HabitRecordActionRequest>(recordPayload)
-        activeDatabase.habits.clearRecords(uid, request.occurredOn, request.occurredAt)
+        HabitListViewModel(activeDatabase.habits, CoroutineScope(Dispatchers.Default))
+            .clearHabitRecordsNow(uid, request.occurredOn, request.occurredAt)
     }
 
     fun importCapturesJson(capturePayload: String): Int = try {
@@ -367,13 +424,14 @@ private object PersistenceRuntime {
     } catch (_: Throwable) { null }
 
     fun deleteHabitJson(uid: String, updatedAt: String): String? = mutateHabit { activeDatabase ->
-        activeDatabase.habits.delete(uid, updatedAt)
+        HabitListViewModel(activeDatabase.habits, CoroutineScope(Dispatchers.Default)).deleteHabitNow(uid, updatedAt)
     }
 
-    private fun mutateHabit(operation: (DeadlinerDatabase) -> Unit): String? = try {
+    private fun mutateHabit(operation: (DeadlinerDatabase) -> HabitListUiState): String? = try {
         val activeDatabase = database ?: return null
-        operation(activeDatabase)
-        habitStateJson()
+        val state = operation(activeDatabase)
+        check(state.error == null) { state.error ?: "KMP habit ViewModel intent failed" }
+        bridgeJson.encodeToString(HabitBridgeState(state.habits, state.records))
     } catch (_: Throwable) {
         null
     }
@@ -381,9 +439,9 @@ private object PersistenceRuntime {
     fun diagnosticsJson(): String {
         val activeDatabase = database
         if (activeDatabase == null) {
-            return "{\"bridge_version\":6,\"ready\":false}"
+            return "{\"bridge_version\":8,\"ready\":false}"
         }
-        return "{\"bridge_version\":6,\"ready\":true,\"categories\":" +
+        return "{\"bridge_version\":8,\"ready\":true,\"categories\":" +
             activeDatabase.categories.list().size +
             ",\"tasks\":" + activeDatabase.tasks.list().size +
             ",\"habits\":" + activeDatabase.habits.list().size +
@@ -413,6 +471,20 @@ private object PersistenceRuntime {
         val baseUrl: String,
         val model: String,
         val timezone: String,
+    )
+
+    private data class LifiUtilityCache(
+        val operation: String,
+        val configPayload: String,
+        val requestPayload: String,
+        val response: String,
+    )
+
+    @Serializable
+    private data class LifiMonthlyAnalysisRequest(
+        val monthName: String,
+        val metricsSummary: String,
+        val completedTaskNames: List<String>,
     )
 
     @Serializable
@@ -615,9 +687,47 @@ fun deadlinerLifiExtractTasksJson(
 ): Int {
     val resolvedConfig = configPayload?.toKString() ?: return 0
     val resolvedText = text?.toKString() ?: return 0
-    return runBlocking {
+    val writeResult = runBlocking {
         writeCallerOwnedJson(PersistenceRuntime.extractLifiTasksJson(resolvedConfig, resolvedText), output, outputCapacity)
     }
+    if (output != null && writeResult > 0 && outputCapacity >= writeResult) PersistenceRuntime.clearPendingLifiUtility()
+    return writeResult
+}
+
+@CName("deadliner_lifi_extract_habits_json")
+fun deadlinerLifiExtractHabitsJson(
+    configPayload: CPointer<ByteVar>?,
+    text: CPointer<ByteVar>?,
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int {
+    val resolvedConfig = configPayload?.toKString() ?: return 0
+    val resolvedText = text?.toKString() ?: return 0
+    val writeResult = runBlocking {
+        writeCallerOwnedJson(PersistenceRuntime.extractLifiHabitsJson(resolvedConfig, resolvedText), output, outputCapacity)
+    }
+    if (output != null && writeResult > 0 && outputCapacity >= writeResult) PersistenceRuntime.clearPendingLifiUtility()
+    return writeResult
+}
+
+@CName("deadliner_lifi_generate_monthly_analysis_json")
+fun deadlinerLifiGenerateMonthlyAnalysisJson(
+    configPayload: CPointer<ByteVar>?,
+    requestPayload: CPointer<ByteVar>?,
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int {
+    val resolvedConfig = configPayload?.toKString() ?: return 0
+    val resolvedRequest = requestPayload?.toKString() ?: return 0
+    val writeResult = runBlocking {
+        writeCallerOwnedJson(
+            PersistenceRuntime.generateLifiMonthlyAnalysisJson(resolvedConfig, resolvedRequest),
+            output,
+            outputCapacity,
+        )
+    }
+    if (output != null && writeResult > 0 && outputCapacity >= writeResult) PersistenceRuntime.clearPendingLifiUtility()
+    return writeResult
 }
 
 @CName("deadliner_lifi_drain_events_json")
@@ -861,7 +971,7 @@ fun deadlinerPersistenceDiagnosticsJson(
 }
 
 @CName("deadliner_persistence_bridge_version")
-fun deadlinerPersistenceBridgeVersion(): Int = 7
+fun deadlinerPersistenceBridgeVersion(): Int = 8
 
 /*
  * Some HarmonyOS system libcurl builds predate libcurl's WebSocket entry points. Ktor's Curl

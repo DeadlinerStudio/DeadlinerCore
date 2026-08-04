@@ -10,6 +10,8 @@ import com.deadliner.platform.TaskNotificationConfig
 import com.deadliner.platform.TaskNotificationInfo
 import com.deadliner.platform.UpcomingLiveUpdateConfig
 import com.deadliner.service.NotificationOrchestrator
+import com.deadliner.domain.task.Task
+import com.deadliner.domain.task.TaskAction
 import com.deadliner.viewmodel.task.TaskCreateConfig
 import com.deadliner.viewmodel.task.TaskListViewModel
 import kotlinx.coroutines.CoroutineScope
@@ -25,6 +27,34 @@ import platform.Foundation.NSTemporaryDirectory
 import platform.posix.remove
 
 class TaskListViewModelIntegrationTest {
+    @Test
+    fun pullBridgeIntentsUseViewModelStateForFullFidelityTasks() {
+        val path = "${NSTemporaryDirectory()}deadliner-viewmodel-pull-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            val viewModel = TaskListViewModel(taskRepository = database.tasks)
+            val task = Task(
+                uid = "task-pull-intent",
+                title = "ViewModel authority",
+                dueAt = "2026-08-04T10:00:00Z",
+                createdAt = "2026-08-04T08:00:00Z",
+                updatedAt = "2026-08-04T08:00:00Z",
+            )
+
+            assertEquals(listOf(task), viewModel.saveTaskNow(task).tasks)
+            assertEquals(
+                "COMPLETED",
+                viewModel.applyTaskActionNow(task.uid, TaskAction.MARK_COMPLETE, "2026-08-04T09:00:00Z")
+                    .tasks.single().state.name,
+            )
+            assertTrue(viewModel.deleteTaskNow(task.uid, "2026-08-04T09:30:00Z").tasks.isEmpty())
+            assertTrue(database.tasks.find(task.uid)?.isDeleted == true)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
     @Test
     fun createCompleteAndDeleteKeepSqliteStateAndNotificationLifecycleAligned() = runBlocking {
         val path = "${NSTemporaryDirectory()}deadliner-viewmodel-${NSUUID().UUIDString}.db"

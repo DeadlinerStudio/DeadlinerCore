@@ -3,8 +3,10 @@ package com.deadliner.viewmodel.habit
 import com.deadliner.db.repository.HabitRepository
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitPeriod
+import com.deadliner.domain.habit.HabitRecord
 import com.deadliner.domain.habit.HabitRecordStatus
 import com.deadliner.domain.habit.HabitStatus
+import com.deadliner.domain.habit.HabitStatusAction
 import com.deadliner.platform.PlatformIdentity
 import com.deadliner.service.NotificationOrchestrator
 import kotlinx.coroutines.CoroutineScope
@@ -61,6 +63,72 @@ class HabitListViewModel(
                 }
             }
         }
+    }
+
+    /** Native pull bridges use the same ViewModel state as flow-based clients. */
+    fun loadNow(): HabitListUiState = try {
+        val habits = habitRepository.list()
+        val records = habitRepository.allRecords()
+        val today = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date.toString()
+        HabitListUiState(
+            habits = habits,
+            records = records,
+            completedToday = calculateCompletedToday(habits, records, today),
+            isLoading = false,
+        ).also { _uiState.value = it }
+    } catch (error: Exception) {
+        HabitListUiState(isLoading = false, error = error.message).also { _uiState.value = it }
+    }
+
+    fun saveHabitNow(habit: Habit): HabitListUiState = try {
+        if (habitRepository.find(habit.uid) == null) {
+            habitRepository.create(habit)
+            notificationOrchestrator?.onHabitCreated(habit)
+        } else {
+            habitRepository.update(habit)
+            notificationOrchestrator?.onHabitUpdated(habit)
+        }
+        loadNow()
+    } catch (error: Exception) {
+        _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
+    }
+
+    fun applyHabitStatusNow(uid: String, action: HabitStatusAction, occurredAt: String): HabitListUiState = try {
+        habitRepository.applyStatusAction(uid, action, occurredAt).habit?.let { habit ->
+            notificationOrchestrator?.onHabitUpdated(habit)
+        }
+        loadNow()
+    } catch (error: Exception) {
+        _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
+    }
+
+    fun toggleHabitRecordNow(uid: String, occurredOn: String, occurredAt: String): HabitListUiState = try {
+        habitRepository.toggleRecord(uid, occurredOn, occurredAt)
+        loadNow()
+    } catch (error: Exception) {
+        _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
+    }
+
+    fun saveHabitRecordNow(record: HabitRecord): HabitListUiState = try {
+        habitRepository.saveRecord(record)
+        loadNow()
+    } catch (error: Exception) {
+        _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
+    }
+
+    fun clearHabitRecordsNow(uid: String, occurredOn: String, occurredAt: String): HabitListUiState = try {
+        habitRepository.clearRecords(uid, occurredOn, occurredAt)
+        loadNow()
+    } catch (error: Exception) {
+        _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
+    }
+
+    fun deleteHabitNow(uid: String, updatedAt: String): HabitListUiState = try {
+        habitRepository.delete(uid, updatedAt)
+        notificationOrchestrator?.onHabitDeleted(uid)
+        loadNow()
+    } catch (error: Exception) {
+        _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
     }
 
     // ===== 写操作（同步更新内存缓存）=====
@@ -162,6 +230,20 @@ class HabitListViewModel(
             }
             val isCompleted = when (habit.period) {
                 HabitPeriod.ONCE, HabitPeriod.EBBINGHAUS -> todayRecords.isNotEmpty()
+                HabitPeriod.DAILY, HabitPeriod.WEEKLY, HabitPeriod.MONTHLY -> todayRecords.sumOf { it.count } >= habit.timesPerPeriod
+            }
+            habit.uid to isCompleted
+        }
+    }
+
+    private fun calculateCompletedToday(habits: List<Habit>, records: List<HabitRecord>, today: String): Map<String, Boolean> {
+        return habits.associate { habit ->
+            val todayRecords = records.filter {
+                it.habitUid == habit.uid &&
+                    it.occurredOn == today && it.status == HabitRecordStatus.COMPLETED
+            }
+            val isCompleted = when (habit.period) {
+                HabitPeriod.ONCE, HabitPeriod.EBBINGHAUS -> todayRecords.isNotEmpty()
                 HabitPeriod.DAILY -> todayRecords.sumOf { it.count } >= habit.timesPerPeriod.coerceAtLeast(1)
                 HabitPeriod.WEEKLY, HabitPeriod.MONTHLY -> todayRecords.isNotEmpty()
             }
@@ -173,6 +255,7 @@ class HabitListViewModel(
 // ===== UiState 定义（使用数据类，易于扩展）=====
 data class HabitListUiState(
     val habits: List<Habit> = emptyList(),
+    val records: List<HabitRecord> = emptyList(),
     val completedToday: Map<String, Boolean> = emptyMap(),
     val isLoading: Boolean = true,
     val error: String? = null,

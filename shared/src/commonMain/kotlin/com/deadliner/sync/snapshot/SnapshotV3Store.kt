@@ -1,8 +1,8 @@
 package com.deadliner.sync.snapshot
 
 import com.deadliner.db.AppDatabase
-import com.deadliner.db.repository.ChangeLogRepository
 import com.deadliner.db.repository.asBoolean
+import com.deadliner.db.repository.asLong
 import com.deadliner.domain.account.UserProfile
 import com.deadliner.domain.account.UserTier
 import com.deadliner.domain.capture.CaptureItem
@@ -21,133 +21,213 @@ import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskState
 import com.deadliner.domain.task.TaskSubtask
-import com.deadliner.model.ChangeLogEntry
-import com.deadliner.model.ChangeOperation
 import com.deadliner.platform.PlatformIdentity
 import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.encodeToJsonElement
-import kotlinx.serialization.json.jsonObject
 
-/** SQLDelight-backed V3 full-state snapshot. The synchronization boundary owns its wire format. */
+/**
+ * The only V3 persistence protocol: a complete, per-entity LWW snapshot.
+ *
+ * Its versions deliberately live in a `v3/` namespace in the existing version table, so V2
+ * migration state cannot affect V3 conflict resolution. No V3 synchronization path reads or
+ * writes a changelog entry.
+ */
 class SnapshotV3Store(
     private val database: AppDatabase,
-    private val changeLog: ChangeLogRepository,
-    private val json: Json = Json,
 ) {
     fun export(): SnapshotV3Root = SnapshotV3Root(
         version = SnapshotV3Version(Clock.System.now().toString(), PlatformIdentity.deviceId()),
-        categories = database.categoryQueries.selectAllIncludingDeleted(::category).executeAsList().map { item ->
-            SnapshotV3CategoryItem(item.uid, versionFor("category", item.uid, item.updatedAt), item.isDeleted, item.takeUnless(Category::isDeleted))
-        },
-        tasks = database.taskQueries.selectAllIncludingDeleted(::task).executeAsList().map { item ->
-            val withSubtasks = item.copy(subtasks = database.taskSubtaskQueries.selectAllForTask(item.uid, ::subtask).executeAsList().filterNot(TaskSubtask::isDeleted))
-            SnapshotV3TaskItem(item.uid, versionFor("task", item.uid, item.updatedAt), item.isDeleted, withSubtasks.takeUnless(Task::isDeleted))
-        },
-        habits = database.habitQueries.selectAllIncludingDeleted(::habit).executeAsList().map { item ->
-            val document = item.takeUnless(Habit::isDeleted)?.let { habit ->
-                SnapshotV3HabitDocument(
-                    habit = habit,
-                    records = database.habitRecordQueries.selectForHabit(habit.uid, ::record).executeAsList(),
-                    scheduleItems = database.habitScheduleQueries.selectForHabit(habit.uid, ::schedule).executeAsList(),
-                )
-            }
-            SnapshotV3HabitItem(item.uid, versionFor("habit", item.uid, item.updatedAt), item.isDeleted, document)
-        },
-        captures = database.captureQueries.selectAllIncludingDeleted(::capture).executeAsList().map { item ->
-            SnapshotV3CaptureItem(item.uid, versionFor("capture_item", item.uid, item.updatedAt), item.isDeleted, item.takeUnless(CaptureItem::isDeleted))
-        },
-        memoryFragments = database.memoryQueries.selectAllIncludingDeleted(::memory).executeAsList().map { item ->
-            SnapshotV3MemoryFragmentItem(item.uid, versionFor("memory_fragment", item.uid, item.updatedAt), item.isDeleted, item.takeUnless(MemoryFragment::isDeleted))
-        },
-        userProfiles = database.userProfileQueries.selectAllIncludingDeleted(::profile).executeAsList().map { item ->
-            SnapshotV3UserProfileItem(item.uid, versionFor("user_profile", item.uid, item.updatedAt), item.isDeleted, item.takeUnless(UserProfile::isDeleted))
-        },
+        categories = withStoredTombstones(
+            database.categoryQueries.selectAllIncludingDeleted(::category).executeAsList().map { value ->
+                SnapshotV3CategoryItem(value.uid, versionFor(CATEGORY, value.uid, value.updatedAt), value.isDeleted, value.takeUnless(Category::isDeleted))
+            }, CATEGORY, { it.uid }, { uid, version -> SnapshotV3CategoryItem(uid, version, true) },
+        ),
+        tasks = withStoredTombstones(
+            database.taskQueries.selectAllIncludingDeleted(::task).executeAsList().map { value ->
+                val document = value.copy(subtasks = database.taskSubtaskQueries.selectAllForTask(value.uid, ::subtask).executeAsList().filterNot(TaskSubtask::isDeleted))
+                SnapshotV3TaskItem(value.uid, versionFor(TASK, value.uid, value.updatedAt), value.isDeleted, document.takeUnless(Task::isDeleted))
+            }, TASK, { it.uid }, { uid, version -> SnapshotV3TaskItem(uid, version, true) },
+        ),
+        habits = withStoredTombstones(
+            database.habitQueries.selectAllIncludingDeleted(::habit).executeAsList().map { value ->
+                val document = value.takeUnless(Habit::isDeleted)?.let { habit ->
+                    SnapshotV3HabitDocument(
+                        habit = habit,
+                        records = database.habitRecordQueries.selectForHabit(habit.uid, ::record).executeAsList(),
+                        scheduleItems = database.habitScheduleQueries.selectForHabit(habit.uid, ::schedule).executeAsList(),
+                    )
+                }
+                SnapshotV3HabitItem(value.uid, versionFor(HABIT, value.uid, value.updatedAt), value.isDeleted, document)
+            }, HABIT, { it.uid }, { uid, version -> SnapshotV3HabitItem(uid, version, true) },
+        ),
+        captures = withStoredTombstones(
+            database.captureQueries.selectAllIncludingDeleted(::capture).executeAsList().map { value ->
+                SnapshotV3CaptureItem(value.uid, versionFor(CAPTURE, value.uid, value.updatedAt), value.isDeleted, value.takeUnless(CaptureItem::isDeleted))
+            }, CAPTURE, { it.uid }, { uid, version -> SnapshotV3CaptureItem(uid, version, true) },
+        ),
+        memoryFragments = withStoredTombstones(
+            database.memoryQueries.selectAllIncludingDeleted(::memory).executeAsList().map { value ->
+                SnapshotV3MemoryFragmentItem(value.uid, versionFor(MEMORY, value.uid, value.updatedAt), value.isDeleted, value.takeUnless(MemoryFragment::isDeleted))
+            }, MEMORY, { it.uid }, { uid, version -> SnapshotV3MemoryFragmentItem(uid, version, true) },
+        ),
+        userProfiles = withStoredTombstones(
+            database.userProfileQueries.selectAllIncludingDeleted(::profile).executeAsList().map { value ->
+                SnapshotV3UserProfileItem(value.uid, versionFor(PROFILE, value.uid, value.updatedAt), value.isDeleted, value.takeUnless(UserProfile::isDeleted))
+            }, PROFILE, { it.uid }, { uid, version -> SnapshotV3UserProfileItem(uid, version, true) },
+        ),
     )
 
-    /** Converts a snapshot into normal immutable changes so it shares the existing LWW applier. */
-    fun asChangeEntries(snapshot: SnapshotV3Root): List<ChangeLogEntry> = buildList {
-        snapshot.categories.forEach { add(it.entry("category", it.doc)) }
-        snapshot.tasks.forEach { item ->
-            add(item.entry("task", item.doc))
-            item.doc?.subtasks?.forEach { subtask -> add(documentEntry("task_subtask", subtask.uid, subtask.updatedAt, item.ver.dev, json.encodeToJsonElement(subtask).jsonObject)) }
+    fun merge(remote: SnapshotV3Root?): SnapshotV3MergeResult {
+        if (remote == null) return SnapshotV3MergeResult(export(), 0, 0)
+        var applied = 0
+        var ignored = 0
+        database.transaction {
+            remote.categories.forEach { item -> applyOrIgnore(CATEGORY, item.uid, item.ver, { applyCategory(item) }, { applied++ }, { ignored++ }) }
+            remote.tasks.forEach { item -> applyOrIgnore(TASK, item.uid, item.ver, { applyTask(item) }, { applied++ }, { ignored++ }) }
+            remote.habits.forEach { item -> applyOrIgnore(HABIT, item.uid, item.ver, { applyHabit(item) }, { applied++ }, { ignored++ }) }
+            remote.captures.forEach { item -> applyOrIgnore(CAPTURE, item.uid, item.ver, { applyCapture(item) }, { applied++ }, { ignored++ }) }
+            remote.memoryFragments.forEach { item -> applyOrIgnore(MEMORY, item.uid, item.ver, { applyMemory(item) }, { applied++ }, { ignored++ }) }
+            remote.userProfiles.forEach { item -> applyOrIgnore(PROFILE, item.uid, item.ver, { applyProfile(item) }, { applied++ }, { ignored++ }) }
         }
-        snapshot.habits.forEach { item ->
-            add(item.entry("habit", item.doc?.habit))
-            item.doc?.records?.forEach { record -> add(documentEntry("habit_record", record.uid, record.updatedAt, item.ver.dev, json.encodeToJsonElement(record).jsonObject)) }
-            item.doc?.scheduleItems?.forEach { schedule -> add(documentEntry("habit_schedule_item", schedule.uid, schedule.updatedAt, item.ver.dev, json.encodeToJsonElement(schedule).jsonObject)) }
-        }
-        snapshot.captures.forEach { add(it.entry("capture_item", it.doc)) }
-        snapshot.memoryFragments.forEach { add(it.entry("memory_fragment", it.doc)) }
-        snapshot.userProfiles.forEach { add(it.entry("user_profile", it.doc)) }
+        return SnapshotV3MergeResult(export(), applied, ignored)
     }
 
-    private fun documentEntry(table: String, uid: String, updatedAt: String, deviceId: String, document: kotlinx.serialization.json.JsonObject): ChangeLogEntry =
-        ChangeLogEntry(
-            id = "snapshot-v3:$table:$uid:$updatedAt:$deviceId",
-            tableName = table,
-            recordId = uid,
-            operation = ChangeOperation.UPDATE,
-            changedFields = document,
-            clientTimestamp = timestamp(updatedAt),
-            serverTimestamp = null,
-            deviceId = deviceId,
-            synced = true,
-        )
-
-    private fun SnapshotV3CategoryItem.entry(table: String, document: Category?): ChangeLogEntry = entry(table, uid, ver, deleted, document?.let { json.encodeToJsonElement(it).jsonObject })
-    private fun SnapshotV3TaskItem.entry(table: String, document: Task?): ChangeLogEntry = entry(table, uid, ver, deleted, document?.let { json.encodeToJsonElement(it).jsonObject })
-    private fun SnapshotV3HabitItem.entry(table: String, document: Habit?): ChangeLogEntry = entry(table, uid, ver, deleted, document?.let { json.encodeToJsonElement(it).jsonObject })
-    private fun SnapshotV3CaptureItem.entry(table: String, document: CaptureItem?): ChangeLogEntry = entry(table, uid, ver, deleted, document?.let { json.encodeToJsonElement(it).jsonObject })
-    private fun SnapshotV3MemoryFragmentItem.entry(table: String, document: MemoryFragment?): ChangeLogEntry = entry(table, uid, ver, deleted, document?.let { json.encodeToJsonElement(it).jsonObject })
-    private fun SnapshotV3UserProfileItem.entry(table: String, document: UserProfile?): ChangeLogEntry = entry(table, uid, ver, deleted, document?.let { json.encodeToJsonElement(it).jsonObject })
-
-    private fun entry(table: String, uid: String, version: SnapshotV3EntityVersion, deleted: Boolean, document: kotlinx.serialization.json.JsonObject?): ChangeLogEntry =
-        ChangeLogEntry(
-            id = "snapshot-v3:$table:$uid:${version.ts}:${version.ctr}:${version.dev}",
-            tableName = table,
-            recordId = uid,
-            operation = if (deleted) ChangeOperation.DELETE else ChangeOperation.UPDATE,
-            changedFields = document,
-            clientTimestamp = timestamp(version.ts),
-            serverTimestamp = null,
-            deviceId = version.dev,
-            synced = true,
-        )
-
-    private fun versionFor(table: String, uid: String, updatedAt: String): SnapshotV3EntityVersion {
-        val latest = changeLog.latestFor(table, uid)
-        return SnapshotV3EntityVersion(
-            ts = latest?.clientTimestamp?.let { Instant.fromEpochMilliseconds(it).toString() } ?: updatedAt,
-            ctr = 0,
-            dev = latest?.deviceId ?: PlatformIdentity.deviceId(),
-        )
+    private fun applyCategory(item: SnapshotV3CategoryItem) {
+        if (item.deleted) {
+            // Keep a non-visible physical row for foreign-key integrity when an old task still
+            // references this category. It is a tombstone, never a syncable live placeholder.
+            database.categoryQueries.insertCategory(item.uid, "已删除分类", "folder", "#808080", false.asLong(), Int.MAX_VALUE.toLong(), item.ver.ts, item.ver.ts, true.asLong())
+            database.categoryQueries.softDeleteCategory(item.ver.ts, item.uid)
+        }
+        else item.doc?.let { value ->
+            database.categoryQueries.insertCategory(value.uid, value.name, value.iconKey, value.colorHex, value.isPreset.asLong(), value.sortOrder.toLong(), value.createdAt, value.updatedAt, 0)
+            database.categoryQueries.updateCategory(value.name, value.iconKey, value.colorHex, value.isPreset.asLong(), value.sortOrder.toLong(), value.updatedAt, 0, value.uid)
+        }
     }
 
-    private fun timestamp(raw: String): Long = runCatching { Instant.parse(raw).toEpochMilliseconds() }
-        .getOrElse { Clock.System.now().toEpochMilliseconds() }
+    private fun applyTask(item: SnapshotV3TaskItem) {
+        if (item.deleted) {
+            database.taskQueries.softDeleteTask(item.ver.ts, item.uid)
+            return
+        }
+        item.doc?.let { value ->
+            database.taskQueries.insertTask(value.uid, value.title, value.note, value.startAt, value.dueAt, value.state.persisted(), value.completedAt, value.categoryUid, value.isStarred.asLong(), value.calendarEventId, value.createdAt, value.updatedAt, 0)
+            database.taskQueries.updateTask(value.title, value.note, value.startAt, value.dueAt, value.state.persisted(), value.completedAt, value.categoryUid, value.isStarred.asLong(), value.calendarEventId, value.updatedAt, 0, value.uid)
+            value.subtasks.forEach(::saveSubtask)
+        }
+    }
 
-    private fun category(uid: String, name: String, iconKey: String, colorHex: String, isPreset: Long, sortOrder: Long, createdAt: String, updatedAt: String, isDeleted: Long) =
-        Category(uid, name, iconKey, colorHex, isPreset.asBoolean(), sortOrder.toInt(), createdAt, updatedAt, isDeleted.asBoolean())
-    private fun task(uid: String, title: String, note: String, startAt: String?, dueAt: String?, state: String, completedAt: String?, categoryUid: String?, isStarred: Long, calendarEventId: Long?, createdAt: String, updatedAt: String, isDeleted: Long) =
-        Task(uid, title, note, startAt, dueAt, TaskState.entries.first { it.name.equals(state, true) || it.persistedValue == state }, completedAt, categoryUid, isStarred.asBoolean(), calendarEventId, createdAt, updatedAt, isDeleted.asBoolean())
-    private fun subtask(uid: String, taskUid: String, content: String, isCompleted: Long, sortOrder: Long, createdAt: String, updatedAt: String, isDeleted: Long) =
-        TaskSubtask(uid, taskUid, content, isCompleted.asBoolean(), sortOrder.toInt(), createdAt, updatedAt, isDeleted.asBoolean())
-    private fun habit(uid: String, name: String, description: String?, color: Long?, iconKey: String?, categoryUid: String?, period: String, timesPerPeriod: Long, goalType: String, totalTarget: Long?, status: String, sortOrder: Long, reminderLocalTime: String?, reminderEnabled: Long?, createdAt: String, updatedAt: String, isDeleted: Long) =
-        Habit(uid, name, description, color?.toInt(), iconKey, categoryUid, HabitPeriod.valueOf(period), timesPerPeriod.toInt(), HabitGoalType.valueOf(goalType), totalTarget?.toInt(), HabitStatus.valueOf(status), sortOrder.toInt(), reminderLocalTime?.let { HabitReminder(it, reminderEnabled?.asBoolean() ?: true) }, createdAt, updatedAt, isDeleted.asBoolean())
-    private fun record(uid: String, habitUid: String, occurredOn: String, count: Long, status: String, createdAt: String, updatedAt: String, isDeleted: Long) =
-        HabitRecord(uid, habitUid, occurredOn, count.toInt(), HabitRecordStatus.valueOf(status), createdAt, updatedAt, isDeleted.asBoolean())
-    private fun schedule(uid: String, habitUid: String, dueAt: String, state: String, createdAt: String, updatedAt: String, isDeleted: Long) =
-        HabitScheduleItem(uid, habitUid, dueAt, HabitScheduleState.valueOf(state), createdAt, updatedAt, isDeleted.asBoolean())
-    private fun capture(uid: String, text: String, source: String, createdAt: String, updatedAt: String, isConsumed: Long, isDeleted: Long) =
-        CaptureItem(uid, text, CaptureSource.valueOf(source), createdAt, updatedAt, isConsumed.asBoolean(), isDeleted.asBoolean())
-    private fun memory(uid: String, content: String, category: String, createdAt: String, importance: Long, updatedAt: String, isDeleted: Long) =
-        MemoryFragment(uid, content, category, createdAt, importance.toInt(), updatedAt, isDeleted.asBoolean())
-    private fun profile(uid: String, nickname: String, avatarFileName: String?, tier: String, createdAt: String, updatedAt: String, isDeleted: Long) =
-        UserProfile(uid, nickname, avatarFileName, UserTier.valueOf(tier), createdAt, updatedAt, isDeleted.asBoolean())
+    private fun applyHabit(item: SnapshotV3HabitItem) {
+        if (item.deleted) {
+            database.habitQueries.softDeleteHabit(item.ver.ts, item.uid)
+            return
+        }
+        item.doc?.let { document ->
+            val value = document.habit
+            database.habitQueries.insertHabit(value.uid, value.name, value.description, value.color?.toLong(), value.iconKey, value.categoryUid, value.period.name, value.timesPerPeriod.toLong(), value.goalType.name, value.totalTarget?.toLong(), value.status.name, value.sortOrder.toLong(), value.reminder?.localTime, value.reminder?.isEnabled?.asLong(), value.createdAt, value.updatedAt, 0)
+            database.habitQueries.updateHabit(value.name, value.description, value.color?.toLong(), value.iconKey, value.categoryUid, value.period.name, value.timesPerPeriod.toLong(), value.goalType.name, value.totalTarget?.toLong(), value.status.name, value.sortOrder.toLong(), value.reminder?.localTime, value.reminder?.isEnabled?.asLong(), value.updatedAt, 0, value.uid)
+            document.records.forEach(::saveRecord)
+            document.scheduleItems.forEach(::saveSchedule)
+        }
+    }
 
-    private val TaskState.persistedValue: String get() = when (this) {
-        TaskState.ACTIVE -> "active"; TaskState.COMPLETED -> "completed"; TaskState.ARCHIVED -> "archived"; TaskState.ABANDONED -> "abandoned"; TaskState.ABANDONED_ARCHIVED -> "abandonedArchived"
+    private fun applyCapture(item: SnapshotV3CaptureItem) {
+        if (item.deleted) database.captureQueries.softDeleteCapture(item.ver.ts, item.uid)
+        else item.doc?.let { value ->
+            database.captureQueries.insertCapture(value.uid, value.text, value.source.name, value.createdAt, value.updatedAt, value.isConsumed.asLong(), 0)
+            database.captureQueries.updateCapture(value.text, value.source.name, value.updatedAt, value.isConsumed.asLong(), 0, value.uid)
+        }
+    }
+
+    private fun applyMemory(item: SnapshotV3MemoryFragmentItem) {
+        if (item.deleted) database.memoryQueries.softDeleteMemory(item.ver.ts, item.uid)
+        else item.doc?.let { value ->
+            database.memoryQueries.insertMemory(value.uid, value.content, value.category, value.createdAt, value.importance.toLong(), value.updatedAt, 0)
+            database.memoryQueries.updateMemory(value.content, value.category, value.importance.toLong(), value.updatedAt, 0, value.uid)
+        }
+    }
+
+    private fun applyProfile(item: SnapshotV3UserProfileItem) {
+        if (item.deleted) database.userProfileQueries.softDeleteUserProfile(item.ver.ts, item.uid)
+        else item.doc?.let { value ->
+            database.userProfileQueries.insertUserProfile(value.uid, value.nickname, value.avatarFileName, value.tier.name, value.createdAt, value.updatedAt, 0)
+            database.userProfileQueries.updateUserProfile(value.nickname, value.avatarFileName, value.tier.name, value.updatedAt, 0, value.uid)
+        }
+    }
+
+    private fun saveSubtask(value: TaskSubtask) {
+        database.taskSubtaskQueries.insertSubtask(value.uid, value.taskUid, value.content, value.isCompleted.asLong(), value.sortOrder.toLong(), value.createdAt, value.updatedAt, value.isDeleted.asLong())
+        database.taskSubtaskQueries.updateSubtask(value.taskUid, value.content, value.isCompleted.asLong(), value.sortOrder.toLong(), value.updatedAt, value.isDeleted.asLong(), value.uid)
+    }
+
+    private fun saveRecord(value: HabitRecord) {
+        database.habitRecordQueries.insertHabitRecord(value.uid, value.habitUid, value.occurredOn, value.count.toLong(), value.status.name, value.createdAt, value.updatedAt, value.isDeleted.asLong())
+        database.habitRecordQueries.updateHabitRecord(value.habitUid, value.occurredOn, value.count.toLong(), value.status.name, value.updatedAt, value.isDeleted.asLong(), value.uid)
+    }
+
+    private fun saveSchedule(value: HabitScheduleItem) {
+        database.habitScheduleQueries.insertHabitSchedule(value.uid, value.habitUid, value.dueAt, value.state.name, value.createdAt, value.updatedAt, value.isDeleted.asLong())
+        database.habitScheduleQueries.updateHabitSchedule(value.habitUid, value.dueAt, value.state.name, value.updatedAt, value.isDeleted.asLong(), value.uid)
+    }
+
+    private fun applyOrIgnore(kind: String, uid: String, incoming: SnapshotV3EntityVersion, apply: () -> Unit, accepted: () -> Unit, rejected: () -> Unit) {
+        if (!isNewerThanStored(kind, uid, incoming)) {
+            rejected()
+            return
+        }
+        apply()
+        saveVersion(kind, uid, incoming)
+        accepted()
+    }
+
+    private fun isNewerThanStored(kind: String, uid: String, incoming: SnapshotV3EntityVersion): Boolean {
+        val stored = storedVersion(kind, uid) ?: return true
+        return incoming.compareTo(stored) > 0
+    }
+
+    private fun versionFor(kind: String, uid: String, updatedAt: String): SnapshotV3EntityVersion {
+        val stored = storedVersion(kind, uid)
+        val localTimestamp = updatedAt.ifBlank { Clock.System.now().toString() }
+        if (stored != null && stored.ts >= localTimestamp) return stored
+        return SnapshotV3EntityVersion(localTimestamp, 0, PlatformIdentity.deviceId()).also { saveVersion(kind, uid, it) }
+    }
+
+    private fun storedVersion(kind: String, uid: String): SnapshotV3EntityVersion? =
+        database.legacyV2VersionQueries.selectVersion(v3Kind(kind), uid) { ts, ctr, dev -> SnapshotV3EntityVersion(ts, ctr.toInt(), dev) }.executeAsOneOrNull()
+
+    private fun saveVersion(kind: String, uid: String, version: SnapshotV3EntityVersion) {
+        database.legacyV2VersionQueries.upsertVersion(v3Kind(kind), uid, version.ts, version.ctr.toLong(), version.dev)
+    }
+
+    private fun <T> withStoredTombstones(items: List<T>, kind: String, uid: (T) -> String, tombstone: (String, SnapshotV3EntityVersion) -> T): List<T> {
+        val known = items.mapTo(mutableSetOf(), uid)
+        return items + database.legacyV2VersionQueries.selectVersionsForKind(v3Kind(kind)) { itemUid, ts, ctr, dev ->
+            itemUid to SnapshotV3EntityVersion(ts, ctr.toInt(), dev)
+        }.executeAsList().filter { (itemUid, _) -> itemUid !in known }.map { (itemUid, version) -> tombstone(itemUid, version) }
+    }
+
+    private fun SnapshotV3EntityVersion.compareTo(other: SnapshotV3EntityVersion): Int =
+        compareValuesBy(this, other, SnapshotV3EntityVersion::ts, SnapshotV3EntityVersion::ctr, SnapshotV3EntityVersion::dev)
+
+    private fun v3Kind(kind: String) = "v3/$kind"
+    private fun TaskState.persisted(): String = when (this) { TaskState.ACTIVE -> "active"; TaskState.COMPLETED -> "completed"; TaskState.ARCHIVED -> "archived"; TaskState.ABANDONED -> "abandoned"; TaskState.ABANDONED_ARCHIVED -> "abandonedArchived" }
+    private fun category(uid: String, name: String, iconKey: String, colorHex: String, isPreset: Long, sortOrder: Long, createdAt: String, updatedAt: String, isDeleted: Long) = Category(uid, name, iconKey, colorHex, isPreset.asBoolean(), sortOrder.toInt(), createdAt, updatedAt, isDeleted.asBoolean())
+    private fun task(uid: String, title: String, note: String, startAt: String?, dueAt: String?, state: String, completedAt: String?, categoryUid: String?, isStarred: Long, calendarEventId: Long?, createdAt: String, updatedAt: String, isDeleted: Long) = Task(uid, title, note, startAt, dueAt, state.toTaskState(), completedAt, categoryUid, isStarred.asBoolean(), calendarEventId, createdAt, updatedAt, isDeleted.asBoolean())
+    private fun subtask(uid: String, taskUid: String, content: String, isCompleted: Long, sortOrder: Long, createdAt: String, updatedAt: String, isDeleted: Long) = TaskSubtask(uid, taskUid, content, isCompleted.asBoolean(), sortOrder.toInt(), createdAt, updatedAt, isDeleted.asBoolean())
+    private fun habit(uid: String, name: String, description: String?, color: Long?, iconKey: String?, categoryUid: String?, period: String, timesPerPeriod: Long, goalType: String, totalTarget: Long?, status: String, sortOrder: Long, reminderLocalTime: String?, reminderEnabled: Long?, createdAt: String, updatedAt: String, isDeleted: Long) = Habit(uid, name, description, color?.toInt(), iconKey, categoryUid, HabitPeriod.valueOf(period), timesPerPeriod.toInt(), HabitGoalType.valueOf(goalType), totalTarget?.toInt(), HabitStatus.valueOf(status), sortOrder.toInt(), reminderLocalTime?.let { HabitReminder(it, reminderEnabled?.asBoolean() ?: true) }, createdAt, updatedAt, isDeleted.asBoolean())
+    private fun record(uid: String, habitUid: String, occurredOn: String, count: Long, status: String, createdAt: String, updatedAt: String, isDeleted: Long) = HabitRecord(uid, habitUid, occurredOn, count.toInt(), HabitRecordStatus.valueOf(status), createdAt, updatedAt, isDeleted.asBoolean())
+    private fun schedule(uid: String, habitUid: String, dueAt: String, state: String, createdAt: String, updatedAt: String, isDeleted: Long) = HabitScheduleItem(uid, habitUid, dueAt, HabitScheduleState.valueOf(state), createdAt, updatedAt, isDeleted.asBoolean())
+    private fun capture(uid: String, text: String, source: String, createdAt: String, updatedAt: String, isConsumed: Long, isDeleted: Long) = CaptureItem(uid, text, CaptureSource.valueOf(source), createdAt, updatedAt, isConsumed.asBoolean(), isDeleted.asBoolean())
+    private fun memory(uid: String, content: String, category: String, createdAt: String, importance: Long, updatedAt: String, isDeleted: Long) = MemoryFragment(uid, content, category, createdAt, importance.toInt(), updatedAt, isDeleted.asBoolean())
+    private fun profile(uid: String, nickname: String, avatarFileName: String?, tier: String, createdAt: String, updatedAt: String, isDeleted: Long) = UserProfile(uid, nickname, avatarFileName, UserTier.valueOf(tier), createdAt, updatedAt, isDeleted.asBoolean())
+    private fun String.toTaskState() = when (this) { "active" -> TaskState.ACTIVE; "completed" -> TaskState.COMPLETED; "archived" -> TaskState.ARCHIVED; "abandoned" -> TaskState.ABANDONED; "abandonedArchived" -> TaskState.ABANDONED_ARCHIVED; else -> error("Unknown persisted TaskState: $this") }
+
+    private companion object {
+        const val CATEGORY = "category"; const val TASK = "task"; const val HABIT = "habit"; const val CAPTURE = "capture_item"; const val MEMORY = "memory_fragment"; const val PROFILE = "user_profile"
     }
 }
+
+data class SnapshotV3MergeResult(
+    val snapshot: SnapshotV3Root,
+    val remoteApplied: Int,
+    val remoteIgnored: Int,
+)

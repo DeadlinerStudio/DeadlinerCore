@@ -57,6 +57,44 @@ class TaskListViewModel(
         }
     }
 
+    /** Native pull bridges use the same ViewModel authority without collecting StateFlow. */
+    fun loadNow(): TaskListUiState = try {
+        TaskListUiState(tasks = taskRepository.list(), isLoading = false).also { _uiState.value = it }
+    } catch (error: Exception) {
+        TaskListUiState(isLoading = false, error = error.message).also { _uiState.value = it }
+    }
+
+    /** Full-fidelity intent used by platform editors that already own a stable task UID. */
+    fun saveTaskNow(task: Task): TaskListUiState = try {
+        if (taskRepository.find(task.uid) == null) {
+            taskRepository.create(task)
+            notificationOrchestrator?.onTaskCreated(task)
+        } else {
+            taskRepository.update(task)
+            notificationOrchestrator?.onTaskUpdated(task)
+        }
+        loadNow()
+    } catch (error: Exception) {
+        _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
+    }
+
+    fun applyTaskActionNow(uid: String, action: TaskAction, occurredAt: String): TaskListUiState = try {
+        taskRepository.applyAction(uid, action, occurredAt).task?.let { task ->
+            notificationOrchestrator?.onTaskUpdated(task)
+        }
+        loadNow()
+    } catch (error: Exception) {
+        _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
+    }
+
+    fun deleteTaskNow(uid: String, updatedAt: String): TaskListUiState = try {
+        taskRepository.delete(uid, updatedAt)
+        notificationOrchestrator?.onTaskDeleted(uid)
+        loadNow()
+    } catch (error: Exception) {
+        _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
+    }
+
     // ===== 写操作（同步更新内存缓存）=====
 
     fun createTask(config: TaskCreateConfig) {

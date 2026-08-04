@@ -1,10 +1,10 @@
-# V3 全量快照与增量日志同步 Module Plan
+# V3 全量快照同步 Module Plan
 
 ## 模块拆分
 
-1. `sync/snapshot`: 从 SQLDelight 全量读取/序列化 V3 业务快照，转换远端快照为可复用的 changelog entries。
-2. `sync`: 将快照导入与增量日志 LWW 合并编排为兼容 payload；WebDAV façade 保持条件写重试和确认时机。
-3. `db`: 补齐全量（含软删除）查询，供快照模块读取。
+1. `sync/snapshot`: 从 SQLDelight 全量读取和直接应用 V3 快照，按 V3 entity version 合并，不经 changelog。
+2. `sync`: 将 WebDAV payload 收敛为 snapshot-only；保留既有条件写重试和公共结果类型。
+3. `db`: 复用隔离命名空间中的持久化版本表，补齐只含版本的 tombstone 查询。
 
 ## 平台映射
 
@@ -13,13 +13,13 @@
 
 ## 文件拆分策略
 
-- 快照组装和快照转日志独立于 `ChangeLogSyncFacade`，避免其继续膨胀。
+- 快照组装/合并独立于 `ChangeLogSyncFacade`，避免业务 DB 写入回到 changelog 层。
 - 不新增超过 1000 行的核心文件；各职责保持单一。
 
 ## 风险点
 
-- 快照时间必须能与旧 changelog 的毫秒时间稳定比较。
-- parent aggregate 与子实体日志的排序必须维持现有 category/task/habit 依赖顺序。
+- 版本表必须与 legacy V2 使用隔离 key，不能互相污染。
+- 父实体先于 task/habit 聚合应用，避免分类外键引用失败。
 
 ## 模块拆分
 
