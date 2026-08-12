@@ -32,6 +32,7 @@ class LifiToolExecutor(
     private val tasks: TaskRepository,
     private val habits: HabitRepository,
     private val json: Json = Json { ignoreUnknownKeys = true },
+    private val notificationOrchestrator: NotificationOrchestrator? = null,
 ) {
     fun execute(toolName: String, argumentsJson: String): String = runCatching {
         val arguments = parseArguments(argumentsJson)
@@ -120,6 +121,7 @@ class LifiToolExecutor(
             updatedAt = now,
         )
         tasks.create(task)
+        notificationOrchestrator?.onTaskCreated(task)
         buildJsonObject {
             put("id", task.uid)
             put("name", task.title)
@@ -136,6 +138,7 @@ class LifiToolExecutor(
         val existing = tasks.find(uid) ?: return failure("NOT_FOUND", "task not found")
         val updated = existing.copy(dueAt = due.toString(), updatedAt = Clock.System.now().toString())
         tasks.update(updated)
+        notificationOrchestrator?.onTaskUpdated(updated)
         return buildJsonObject {
             put("ok", true)
             put("task", buildJsonObject {
@@ -195,6 +198,7 @@ class LifiToolExecutor(
             createdAt = now,
         )
         habits.create(habit)
+        notificationOrchestrator?.onHabitCreated(habit)
         buildJsonObject {
             put("id", habit.uid)
             put("name", habit.name)

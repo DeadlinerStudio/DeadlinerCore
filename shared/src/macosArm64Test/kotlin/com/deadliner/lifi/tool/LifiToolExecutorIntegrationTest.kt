@@ -2,7 +2,15 @@ package com.deadliner.lifi.tool
 
 import com.deadliner.db.DeadlinerDatabase
 import com.deadliner.db.MacosDatabaseDriverFactory
+import com.deadliner.platform.DailySummaryConfig
+import com.deadliner.platform.HabitNotificationConfig
+import com.deadliner.platform.HabitNotificationInfo
+import com.deadliner.platform.NotificationGateway
+import com.deadliner.platform.TaskNotificationConfig
+import com.deadliner.platform.TaskNotificationInfo
+import com.deadliner.platform.UpcomingLiveUpdateConfig
 import com.deadliner.service.LifiToolExecutor
+import com.deadliner.service.NotificationOrchestrator
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -20,7 +28,12 @@ class LifiToolExecutorIntegrationTest {
     @Test
     fun createsAndReadsTasksAndHabitsThroughSharedRepositories() {
         withDatabase { database ->
-            val tools = LifiToolExecutor(database.tasks, database.habits)
+            val notifications = RecordingNotificationGateway()
+            val tools = LifiToolExecutor(
+                database.tasks,
+                database.habits,
+                notificationOrchestrator = NotificationOrchestrator(notifications),
+            )
             val taskResult = tools.execute(
                 "create_task",
                 """{"name":"Ship v6","dueTime":"2026-08-20 20:00","note":"KMP"}""",
@@ -45,6 +58,8 @@ class LifiToolExecutorIntegrationTest {
             ).objectValue()
             assertTrue(update.boolean("ok"))
             assertEquals("2026-08-22T09:30", database.tasks.find(taskUid)?.dueAt)
+            assertEquals(listOf(taskUid, taskUid), notifications.taskSchedules.map { it.taskUid })
+            assertEquals(database.habits.list().single().uid, notifications.cancelledHabitUids.single())
         }
     }
 
@@ -75,4 +90,22 @@ class LifiToolExecutorIntegrationTest {
     private fun String.objectValue() = Json.parseToJsonElement(this).jsonObject
     private fun kotlinx.serialization.json.JsonObject.boolean(key: String) = this[key]!!.jsonPrimitive.content.toBoolean()
     private fun kotlinx.serialization.json.JsonObject.string(key: String) = this[key]?.jsonPrimitive?.content
+}
+
+private class RecordingNotificationGateway : NotificationGateway {
+    val taskSchedules = mutableListOf<TaskNotificationConfig>()
+    val cancelledHabitUids = mutableListOf<String>()
+
+    override fun setTaskNotification(config: TaskNotificationConfig) { taskSchedules += config }
+    override fun cancelTaskNotification(taskUid: String) = Unit
+    override fun cancelAllTaskNotifications() = Unit
+    override fun setHabitNotification(config: HabitNotificationConfig) = Unit
+    override fun cancelHabitNotification(habitUid: String) { cancelledHabitUids += habitUid }
+    override fun cancelAllHabitNotifications() = Unit
+    override fun setDailySummaryNotification(config: DailySummaryConfig) = Unit
+    override fun cancelDailySummaryNotification() = Unit
+    override fun setUpcomingLiveUpdate(config: UpcomingLiveUpdateConfig) = Unit
+    override fun cancelUpcomingLiveUpdate(taskUid: String) = Unit
+    override fun cancelAll() = Unit
+    override fun refreshAll(tasks: List<TaskNotificationInfo>, habits: List<HabitNotificationInfo>) = Unit
 }
