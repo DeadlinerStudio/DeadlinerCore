@@ -158,6 +158,39 @@ class TaskDetailViewModel(
         }
     }
 
+    fun updateSubtaskContent(subtaskUid: String, content: String) {
+        val normalized = content.trim()
+        if (normalized.isEmpty()) return
+        updateTask { task ->
+            task.copy(subtasks = task.subtasks.map { subtask ->
+                if (subtask.uid == subtaskUid) {
+                    subtask.copy(content = normalized, updatedAt = Clock.System.now().toString())
+                } else subtask
+            })
+        }
+    }
+
+    fun setStarred(isStarred: Boolean) {
+        updateTask { it.copy(isStarred = isStarred, updatedAt = Clock.System.now().toString()) }
+    }
+
+    fun setCalendarEventId(calendarEventId: Long?) {
+        updateTask { it.copy(calendarEventId = calendarEventId, updatedAt = Clock.System.now().toString()) }
+    }
+
+    private fun updateTask(transform: (Task) -> Task) {
+        scope.launch {
+            try {
+                val updated = transform(_uiState.value.task ?: return@launch)
+                taskRepository.update(updated)
+                notificationOrchestrator?.onTaskUpdated(updated)
+                _uiState.update { it.copy(task = updated, error = null) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = e.message) }
+            }
+        }
+    }
+
     // ===== 删除任务 =====
     fun deleteTask() {
         scope.launch {
