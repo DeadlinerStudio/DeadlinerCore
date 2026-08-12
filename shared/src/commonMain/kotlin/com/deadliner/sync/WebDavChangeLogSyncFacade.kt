@@ -70,6 +70,7 @@ class WebDavChangeLogSyncFacade(
         return WebDavChangeLogSyncResult(
             remoteApplied = merge.remoteApplied,
             remoteIgnored = merge.remoteIgnored,
+            appliedResources = merge.appliedResources,
         )
     }
 
@@ -100,6 +101,7 @@ class WebDavChangeLogSyncFacade(
                 succeeded = true,
                 remoteApplied = it.remoteApplied,
                 remoteIgnored = it.remoteIgnored,
+                appliedResources = it.appliedResources,
             )
         }
     } catch (error: Throwable) {
@@ -119,6 +121,7 @@ class WebDavChangeLogSyncFacade(
 data class WebDavChangeLogSyncResult(
     val remoteApplied: Int,
     val remoteIgnored: Int,
+    val appliedResources: Set<SyncResourceKind> = emptySet(),
 )
 
 /** A non-throwing result suitable for calls across the Swift/Kotlin boundary. */
@@ -127,5 +130,16 @@ data class WebDavChangeLogSyncOutcome(
     val succeeded: Boolean,
     val remoteApplied: Int = 0,
     val remoteIgnored: Int = 0,
+    val appliedResources: Set<SyncResourceKind> = emptySet(),
     val failureMessage: String? = null,
 )
+
+@Serializable
+enum class SyncResourceKind {
+    CATEGORY,
+    TASK,
+    HABIT,
+    CAPTURE,
+    MEMORY,
+    PROFILE,
+}

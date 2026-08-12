@@ -16,11 +16,17 @@ import com.deadliner.viewmodel.overview.OverviewViewModel
 import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskAction
 import com.deadliner.domain.habit.Habit
+import com.deadliner.domain.category.Category
+import com.deadliner.domain.category.CategoryMutation
+import com.deadliner.domain.category.CategoryMutationRequest
+import com.deadliner.domain.category.HabitCategoryAssignmentRequest
+import com.deadliner.domain.category.CategoryMutationResult
 import com.deadliner.domain.habit.HabitRecord
 import com.deadliner.domain.habit.HabitStatusAction
 import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.domain.account.UserProfile
+import com.deadliner.platform.PlatformIdentity
 import com.deadliner.domain.ai.AiHabitProposal
 import com.deadliner.domain.ai.AiTaskProposal
 import com.deadliner.domain.ai.model.CoreEvent
@@ -41,6 +47,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
+import kotlinx.datetime.Clock
 
 /**
  * Small C ABI for the HarmonyOS NAPI module.
@@ -50,14 +57,18 @@ import kotlinx.coroutines.withTimeout
  */
 private object PersistenceRuntime {
     var database: DeadlinerDatabase? = null
+    private var lastInitializationError: String = ""
     private var pendingLegacyV2Merge: LegacyV2MergeCache? = null
     private var pendingChangeLogSync: ChangeLogSyncCache? = null
+    private var pendingCategoryMutation: CategoryMutationCache? = null
+    private var pendingStateMutation: StateMutationCache? = null
     private var lifiCore: OhosLifiCore? = null
     private var lifiSignature: String? = null
     private var pendingLifiUtility: LifiUtilityCache? = null
     private val lifiEvents = mutableListOf<CoreEvent>()
 
     fun initialize(directory: String, installationId: String): Int = try {
+        lastInitializationError = ""
         require(directory.startsWith('/')) { "database directory must be absolute" }
         require(installationId.isNotBlank()) { "installation ID must not be blank" }
         closeLifiCore()
@@ -65,12 +76,17 @@ private object PersistenceRuntime {
         database = DeadlinerDatabase.create(OhosDatabaseDriverFactory(directory, installationId))
         pendingLegacyV2Merge = null
         pendingChangeLogSync = null
+        pendingCategoryMutation = null
+        pendingStateMutation = null
         pendingLifiUtility = null
         1
-    } catch (_: Throwable) {
+    } catch (error: Throwable) {
         database = null
+        lastInitializationError = error.message ?: error.toString()
         0
     }
+
+    fun initializationError(): String = lastInitializationError
 
     fun close(): Int {
         closeLifiCore()
@@ -78,6 +94,8 @@ private object PersistenceRuntime {
         database = null
         pendingLegacyV2Merge = null
         pendingChangeLogSync = null
+        pendingCategoryMutation = null
+        pendingStateMutation = null
         pendingLifiUtility = null
         return 1
     }
@@ -267,6 +285,67 @@ private object PersistenceRuntime {
         pendingChangeLogSync = null
     }
 
+    fun configureAutomaticWebDavSync(baseUrl: String, username: String, password: String): Int = try {
+        val activeDatabase = database ?: return 0
+        if (baseUrl.isBlank()) {
+            activeDatabase.disableAutomaticSync()
+        } else {
+            activeDatabase.configureAutomaticWebDavSync(
+                WebDavTransportConfiguration(
+                    baseUrl = baseUrl,
+                    credentials = WebDavCredentials(
+                        username = username.takeIf(String::isNotBlank),
+                        password = password.takeIf(String::isNotBlank),
+                    ),
+                    requestTimeoutMillis = 15_000,
+                ),
+            )
+        }
+        1
+    } catch (_: Throwable) {
+        0
+    }
+
+    fun resolveCategoryMutationJson(
+        operation: String,
+        requestPayload: String,
+        execute: () -> String?,
+    ): String? {
+        val pending = pendingCategoryMutation
+        if (pending != null && pending.operation == operation && pending.requestPayload == requestPayload) {
+            return pending.responsePayload
+        }
+        val response = execute()
+        if (response != null) pendingCategoryMutation = CategoryMutationCache(operation, requestPayload, response)
+        return response
+    }
+
+    fun clearPendingCategoryMutation() {
+        pendingCategoryMutation = null
+    }
+
+    /**
+     * NAPI asks a mutating C ABI twice: once for the response size and once for its bytes.
+     * Retain the first response so each user action is committed exactly once.
+     */
+    fun resolveStateMutationJson(
+        operation: String,
+        requestPayload: String,
+        execute: () -> String?,
+    ): String? {
+        val pending = pendingStateMutation
+        if (pending != null && pending.operation == operation && pending.requestPayload == requestPayload) {
+            return pending.responsePayload
+        }
+        val response = execute()
+        if (response != null) pendingStateMutation = StateMutationCache(operation, requestPayload, response)
+        return response
+    }
+
+    fun clearPendingStateMutation() {
+        pendingStateMutation = null
+    }
+
     /** Reads the actual KMP task-list ViewModel state; ArkTS receives only its serializable DTO. */
     fun taskListViewModelJson(): String? = try {
         val activeDatabase = database ?: return null
@@ -276,6 +355,81 @@ private object PersistenceRuntime {
     } catch (_: Throwable) {
         null
     }
+
+    /** Returns the persisted categories; presets are inserted once at database creation. */
+    fun categoryCatalogJson(): String? = try {
+        val activeDatabase = database ?: return null
+        bridgeJson.encodeToString(categoryCatalog(activeDatabase))
+    } catch (_: Throwable) {
+        null
+    }
+
+    fun createCategoryJson(payload: String): String? = try {
+        val activeDatabase = database ?: return null
+        val request = bridgeJson.decodeFromString<CategoryMutationRequest>(payload)
+        val now = Clock.System.now().toString()
+        val existing = categoryCatalog(activeDatabase)
+        val nextSortOrder = (existing.maxOfOrNull { it.sortOrder } ?: 0) + 10
+        val created = CategoryMutation.create(request, PlatformIdentity.newId(), nextSortOrder, now)
+        activeDatabase.categories.create(created)
+        bridgeJson.encodeToString(CategoryMutationResult(created, categoryCatalog(activeDatabase)))
+    } catch (_: Throwable) {
+        null
+    }
+
+    fun updateCategoryJson(payload: String): String? = try {
+        val activeDatabase = database ?: return null
+        val request = bridgeJson.decodeFromString<CategoryMutationRequest>(payload)
+        val uid = requireNotNull(request.uid) { "category uid is required" }
+        val existing = categoryCatalog(activeDatabase).firstOrNull { it.uid == uid }
+            ?: error("category not found")
+        val updated = CategoryMutation.update(existing, request, Clock.System.now().toString())
+        activeDatabase.categories.update(updated)
+        bridgeJson.encodeToString(CategoryMutationResult(updated, categoryCatalog(activeDatabase)))
+    } catch (_: Throwable) {
+        null
+    }
+
+    fun deleteCategoryJson(uid: String, updatedAt: String): String? = try {
+        val activeDatabase = database ?: return null
+        requireNotNull(activeDatabase.categories.find(uid)) { "category not found" }
+        activeDatabase.categories.softDelete(uid, updatedAt)
+        bridgeJson.encodeToString(CategoryMutationResult(categories = categoryCatalog(activeDatabase)))
+    } catch (_: Throwable) {
+        null
+    }
+
+    fun restorePresetCategoriesJson(): String? = try {
+        val activeDatabase = database ?: return null
+        bridgeJson.encodeToString(CategoryMutationResult(categories = activeDatabase.categories.restorePresets()))
+    } catch (_: Throwable) {
+        null
+    }
+
+    /** Keeps the Habit source record and the legacy Deadline carrier aligned in one SQL transaction. */
+    fun updateHabitCategoryJson(payload: String): String? = try {
+        val activeDatabase = database ?: return null
+        val request = bridgeJson.decodeFromString<HabitCategoryAssignmentRequest>(payload)
+        if (request.categoryUid != null) {
+            require(categoryCatalog(activeDatabase).any { it.uid == request.categoryUid }) { "category not found" }
+        }
+        val habit = activeDatabase.habits.find(request.uid) ?: error("habit not found")
+        val now = Clock.System.now().toString()
+        activeDatabase.database.transaction {
+            activeDatabase.habits.update(habit.copy(categoryUid = request.categoryUid, updatedAt = now))
+            val carrier = activeDatabase.tasks.find(request.uid)
+            if (carrier != null) {
+                activeDatabase.tasks.update(carrier.copy(categoryUid = request.categoryUid, updatedAt = now))
+            }
+        }
+        habitStateJson()
+    } catch (_: Throwable) {
+        null
+    }
+
+    /** Category deletion deliberately does not rewrite historical task or habit references. */
+    private fun categoryCatalog(activeDatabase: DeadlinerDatabase): List<Category> =
+        activeDatabase.categories.list().sortedBy(Category::sortOrder)
 
     /** HarmonyOS receives the same one-shot overview state consumed by the iOS bridge. */
     fun overviewViewModelJson(): String? = try {
@@ -439,9 +593,9 @@ private object PersistenceRuntime {
     fun diagnosticsJson(): String {
         val activeDatabase = database
         if (activeDatabase == null) {
-            return "{\"bridge_version\":8,\"ready\":false}"
+            return "{\"bridge_version\":11,\"ready\":false}"
         }
-        return "{\"bridge_version\":8,\"ready\":true,\"categories\":" +
+        return "{\"bridge_version\":11,\"ready\":true,\"categories\":" +
             activeDatabase.categories.list().size +
             ",\"tasks\":" + activeDatabase.tasks.list().size +
             ",\"habits\":" + activeDatabase.habits.list().size +
@@ -462,6 +616,18 @@ private object PersistenceRuntime {
         val baseUrl: String,
         val username: String,
         val password: String,
+        val responsePayload: String,
+    )
+
+    private data class CategoryMutationCache(
+        val operation: String,
+        val requestPayload: String,
+        val responsePayload: String,
+    )
+
+    private data class StateMutationCache(
+        val operation: String,
+        val requestPayload: String,
         val responsePayload: String,
     )
 
@@ -643,6 +809,47 @@ private fun writeCallerOwnedJson(
     return requiredCapacity
 }
 
+/**
+ * A NAPI caller first asks for the required size and then calls again with a buffer. Category
+ * mutations must run only once, so retain their serialized response between those two calls.
+ */
+private fun writeCategoryMutationJson(
+    operation: String,
+    requestPayload: String,
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+    execute: () -> String?,
+): Int {
+    val writeResult = writeCallerOwnedJson(
+        PersistenceRuntime.resolveCategoryMutationJson(operation, requestPayload, execute),
+        output,
+        outputCapacity,
+    )
+    if (output != null && writeResult > 0 && outputCapacity >= writeResult) {
+        PersistenceRuntime.clearPendingCategoryMutation()
+    }
+    return writeResult
+}
+
+/** Writes a task or habit mutation response without re-running the mutation during NAPI's size probe. */
+private fun writeStateMutationJson(
+    operation: String,
+    requestPayload: String,
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+    execute: () -> String?,
+): Int {
+    val writeResult = writeCallerOwnedJson(
+        PersistenceRuntime.resolveStateMutationJson(operation, requestPayload, execute),
+        output,
+        outputCapacity,
+    )
+    if (output != null && writeResult > 0 && outputCapacity >= writeResult) {
+        PersistenceRuntime.clearPendingStateMutation()
+    }
+    return writeResult
+}
+
 @CName("deadliner_persistence_initialize")
 fun deadlinerPersistenceInitialize(
     directory: CPointer<ByteVar>?,
@@ -652,6 +859,12 @@ fun deadlinerPersistenceInitialize(
     val resolvedInstallationId = installationId?.toKString() ?: return 0
     return PersistenceRuntime.initialize(resolvedDirectory, resolvedInstallationId)
 }
+
+@CName("deadliner_persistence_last_initialization_error")
+fun deadlinerPersistenceLastInitializationError(
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int = writeCallerOwnedJson(PersistenceRuntime.initializationError(), output, outputCapacity)
 
 @CName("deadliner_persistence_close")
 fun deadlinerPersistenceClose(): Int = PersistenceRuntime.close()
@@ -797,11 +1010,75 @@ fun deadlinerPersistenceSyncWebDavChangeLogJson(
     return writeResult
 }
 
+@CName("deadliner_persistence_configure_automatic_webdav_sync")
+fun deadlinerPersistenceConfigureAutomaticWebDavSync(
+    baseUrl: CPointer<ByteVar>?,
+    username: CPointer<ByteVar>?,
+    password: CPointer<ByteVar>?,
+): Int = PersistenceRuntime.configureAutomaticWebDavSync(
+    baseUrl?.toKString() ?: return 0,
+    username?.toKString() ?: return 0,
+    password?.toKString() ?: return 0,
+)
+
 @CName("deadliner_persistence_task_list_view_model_json")
 fun deadlinerPersistenceTaskListViewModelJson(
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
 ): Int = writeCallerOwnedJson(PersistenceRuntime.taskListViewModelJson(), output, outputCapacity)
+
+@CName("deadliner_persistence_category_catalog_json")
+fun deadlinerPersistenceCategoryCatalogJson(
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int = writeCallerOwnedJson(PersistenceRuntime.categoryCatalogJson(), output, outputCapacity)
+
+@CName("deadliner_persistence_category_create_json")
+fun deadlinerPersistenceCategoryCreateJson(
+    payload: CPointer<ByteVar>?,
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int {
+    val resolvedPayload = payload?.toKString() ?: return 0
+    return writeCategoryMutationJson("create", resolvedPayload, output, outputCapacity) {
+        PersistenceRuntime.createCategoryJson(resolvedPayload)
+    }
+}
+
+@CName("deadliner_persistence_category_update_json")
+fun deadlinerPersistenceCategoryUpdateJson(
+    payload: CPointer<ByteVar>?,
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int {
+    val resolvedPayload = payload?.toKString() ?: return 0
+    return writeCategoryMutationJson("update", resolvedPayload, output, outputCapacity) {
+        PersistenceRuntime.updateCategoryJson(resolvedPayload)
+    }
+}
+
+@CName("deadliner_persistence_category_delete_json")
+fun deadlinerPersistenceCategoryDeleteJson(
+    uid: CPointer<ByteVar>?,
+    updatedAt: CPointer<ByteVar>?,
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int {
+    val resolvedUid = uid?.toKString() ?: return 0
+    val resolvedUpdatedAt = updatedAt?.toKString() ?: return 0
+    val requestPayload = resolvedUid + "\u001F" + resolvedUpdatedAt
+    return writeCategoryMutationJson("delete", requestPayload, output, outputCapacity) {
+        PersistenceRuntime.deleteCategoryJson(resolvedUid, resolvedUpdatedAt)
+    }
+}
+
+@CName("deadliner_persistence_category_restore_presets_json")
+fun deadlinerPersistenceCategoryRestorePresetsJson(
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int = writeCategoryMutationJson("restore_presets", "", output, outputCapacity) {
+    PersistenceRuntime.restorePresetCategoriesJson()
+}
 
 @CName("deadliner_persistence_overview_view_model_json")
 fun deadlinerPersistenceOverviewViewModelJson(
@@ -814,14 +1091,24 @@ fun deadlinerPersistenceTaskCreateJson(
     taskPayload: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(taskPayload?.toKString()?.let(PersistenceRuntime::createTaskJson), output, outputCapacity)
+): Int {
+    val payload = taskPayload?.toKString() ?: return 0
+    return writeStateMutationJson("task_create", payload, output, outputCapacity) {
+        PersistenceRuntime.createTaskJson(payload)
+    }
+}
 
 @CName("deadliner_persistence_task_update_json")
 fun deadlinerPersistenceTaskUpdateJson(
     taskPayload: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(taskPayload?.toKString()?.let(PersistenceRuntime::updateTaskJson), output, outputCapacity)
+): Int {
+    val payload = taskPayload?.toKString() ?: return 0
+    return writeStateMutationJson("task_update", payload, output, outputCapacity) {
+        PersistenceRuntime.updateTaskJson(payload)
+    }
+}
 
 @CName("deadliner_persistence_task_action_json")
 fun deadlinerPersistenceTaskActionJson(
@@ -829,11 +1116,13 @@ fun deadlinerPersistenceTaskActionJson(
     actionPayload: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(
-    if (uid == null || actionPayload == null) null else PersistenceRuntime.applyTaskActionJson(uid.toKString(), actionPayload.toKString()),
-    output,
-    outputCapacity,
-)
+): Int {
+    val resolvedUid = uid?.toKString() ?: return 0
+    val payload = actionPayload?.toKString() ?: return 0
+    return writeStateMutationJson("task_action", resolvedUid + "\u001F" + payload, output, outputCapacity) {
+        PersistenceRuntime.applyTaskActionJson(resolvedUid, payload)
+    }
+}
 
 @CName("deadliner_persistence_task_delete_json")
 fun deadlinerPersistenceTaskDeleteJson(
@@ -841,11 +1130,13 @@ fun deadlinerPersistenceTaskDeleteJson(
     updatedAt: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(
-    if (uid == null || updatedAt == null) null else PersistenceRuntime.deleteTaskJson(uid.toKString(), updatedAt.toKString()),
-    output,
-    outputCapacity,
-)
+): Int {
+    val resolvedUid = uid?.toKString() ?: return 0
+    val timestamp = updatedAt?.toKString() ?: return 0
+    return writeStateMutationJson("task_delete", resolvedUid + "\u001F" + timestamp, output, outputCapacity) {
+        PersistenceRuntime.deleteTaskJson(resolvedUid, timestamp)
+    }
+}
 
 @CName("deadliner_persistence_habit_state_json")
 fun deadlinerPersistenceHabitStateJson(
@@ -858,14 +1149,31 @@ fun deadlinerPersistenceHabitCreateJson(
     habitPayload: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(habitPayload?.toKString()?.let(PersistenceRuntime::createHabitJson), output, outputCapacity)
+): Int {
+    val payload = habitPayload?.toKString() ?: return 0
+    return writeStateMutationJson("habit_create", payload, output, outputCapacity) {
+        PersistenceRuntime.createHabitJson(payload)
+    }
+}
 
 @CName("deadliner_persistence_habit_update_json")
 fun deadlinerPersistenceHabitUpdateJson(
     habitPayload: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(habitPayload?.toKString()?.let(PersistenceRuntime::updateHabitJson), output, outputCapacity)
+): Int {
+    val payload = habitPayload?.toKString() ?: return 0
+    return writeStateMutationJson("habit_update", payload, output, outputCapacity) {
+        PersistenceRuntime.updateHabitJson(payload)
+    }
+}
+
+@CName("deadliner_persistence_habit_category_update_json")
+fun deadlinerPersistenceHabitCategoryUpdateJson(
+    payload: CPointer<ByteVar>?,
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int = writeCallerOwnedJson(payload?.toKString()?.let(PersistenceRuntime::updateHabitCategoryJson), output, outputCapacity)
 
 @CName("deadliner_persistence_habit_status_action_json")
 fun deadlinerPersistenceHabitStatusActionJson(
@@ -873,11 +1181,13 @@ fun deadlinerPersistenceHabitStatusActionJson(
     actionPayload: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(
-    if (uid == null || actionPayload == null) null else PersistenceRuntime.applyHabitStatusJson(uid.toKString(), actionPayload.toKString()),
-    output,
-    outputCapacity,
-)
+): Int {
+    val resolvedUid = uid?.toKString() ?: return 0
+    val payload = actionPayload?.toKString() ?: return 0
+    return writeStateMutationJson("habit_status_action", resolvedUid + "\u001F" + payload, output, outputCapacity) {
+        PersistenceRuntime.applyHabitStatusJson(resolvedUid, payload)
+    }
+}
 
 @CName("deadliner_persistence_habit_toggle_record_json")
 fun deadlinerPersistenceHabitToggleRecordJson(
@@ -885,18 +1195,25 @@ fun deadlinerPersistenceHabitToggleRecordJson(
     recordPayload: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(
-    if (uid == null || recordPayload == null) null else PersistenceRuntime.toggleHabitRecordJson(uid.toKString(), recordPayload.toKString()),
-    output,
-    outputCapacity,
-)
+): Int {
+    val resolvedUid = uid?.toKString() ?: return 0
+    val payload = recordPayload?.toKString() ?: return 0
+    return writeStateMutationJson("habit_toggle_record", resolvedUid + "\u001F" + payload, output, outputCapacity) {
+        PersistenceRuntime.toggleHabitRecordJson(resolvedUid, payload)
+    }
+}
 
 @CName("deadliner_persistence_habit_save_record_json")
 fun deadlinerPersistenceHabitSaveRecordJson(
     recordPayload: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(recordPayload?.toKString()?.let(PersistenceRuntime::saveHabitRecordJson), output, outputCapacity)
+): Int {
+    val payload = recordPayload?.toKString() ?: return 0
+    return writeStateMutationJson("habit_save_record", payload, output, outputCapacity) {
+        PersistenceRuntime.saveHabitRecordJson(payload)
+    }
+}
 
 @CName("deadliner_persistence_habit_clear_records_json")
 fun deadlinerPersistenceHabitClearRecordsJson(
@@ -904,11 +1221,13 @@ fun deadlinerPersistenceHabitClearRecordsJson(
     recordPayload: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(
-    if (uid == null || recordPayload == null) null else PersistenceRuntime.clearHabitRecordsJson(uid.toKString(), recordPayload.toKString()),
-    output,
-    outputCapacity,
-)
+): Int {
+    val resolvedUid = uid?.toKString() ?: return 0
+    val payload = recordPayload?.toKString() ?: return 0
+    return writeStateMutationJson("habit_clear_records", resolvedUid + "\u001F" + payload, output, outputCapacity) {
+        PersistenceRuntime.clearHabitRecordsJson(resolvedUid, payload)
+    }
+}
 
 @CName("deadliner_persistence_habit_delete_json")
 fun deadlinerPersistenceHabitDeleteJson(
@@ -916,11 +1235,13 @@ fun deadlinerPersistenceHabitDeleteJson(
     updatedAt: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(
-    if (uid == null || updatedAt == null) null else PersistenceRuntime.deleteHabitJson(uid.toKString(), updatedAt.toKString()),
-    output,
-    outputCapacity,
-)
+): Int {
+    val resolvedUid = uid?.toKString() ?: return 0
+    val timestamp = updatedAt?.toKString() ?: return 0
+    return writeStateMutationJson("habit_delete", resolvedUid + "\u001F" + timestamp, output, outputCapacity) {
+        PersistenceRuntime.deleteHabitJson(resolvedUid, timestamp)
+    }
+}
 
 @CName("deadliner_persistence_import_captures_json")
 fun deadlinerPersistenceImportCapturesJson(capturePayload: CPointer<ByteVar>?): Int =
@@ -971,7 +1292,7 @@ fun deadlinerPersistenceDiagnosticsJson(
 }
 
 @CName("deadliner_persistence_bridge_version")
-fun deadlinerPersistenceBridgeVersion(): Int = 8
+fun deadlinerPersistenceBridgeVersion(): Int = 12
 
 /*
  * Some HarmonyOS system libcurl builds predate libcurl's WebSocket entry points. Ktor's Curl

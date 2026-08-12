@@ -22,6 +22,7 @@ import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskState
 import com.deadliner.domain.task.TaskSubtask
 import com.deadliner.platform.PlatformIdentity
+import com.deadliner.sync.SyncResourceKind
 import kotlinx.datetime.Clock
 
 /**
@@ -49,14 +50,21 @@ class SnapshotV3Store(
         ),
         habits = withStoredTombstones(
             database.habitQueries.selectAllIncludingDeleted(::habit).executeAsList().map { value ->
+                val allRecords = database.habitRecordQueries.selectAllForHabit(value.uid, ::record).executeAsList()
+                val allScheduleItems = database.habitScheduleQueries.selectAllForHabit(value.uid, ::schedule).executeAsList()
                 val document = value.takeUnless(Habit::isDeleted)?.let { habit ->
                     SnapshotV3HabitDocument(
                         habit = habit,
-                        records = database.habitRecordQueries.selectForHabit(habit.uid, ::record).executeAsList(),
-                        scheduleItems = database.habitScheduleQueries.selectForHabit(habit.uid, ::schedule).executeAsList(),
+                        records = allRecords.filterNot(HabitRecord::isDeleted),
+                        scheduleItems = allScheduleItems.filterNot(HabitScheduleItem::isDeleted),
                     )
                 }
-                SnapshotV3HabitItem(value.uid, versionFor(HABIT, value.uid, value.updatedAt), value.isDeleted, document)
+                val aggregateUpdatedAt = sequenceOf(
+                    sequenceOf(value.updatedAt),
+                    allRecords.asSequence().map(HabitRecord::updatedAt),
+                    allScheduleItems.asSequence().map(HabitScheduleItem::updatedAt),
+                ).flatten().maxOrNull() ?: value.updatedAt
+                SnapshotV3HabitItem(value.uid, versionFor(HABIT, value.uid, aggregateUpdatedAt), value.isDeleted, document)
             }, HABIT, { it.uid }, { uid, version -> SnapshotV3HabitItem(uid, version, true) },
         ),
         captures = withStoredTombstones(
@@ -80,15 +88,16 @@ class SnapshotV3Store(
         if (remote == null) return SnapshotV3MergeResult(export(), 0, 0)
         var applied = 0
         var ignored = 0
+        val appliedResources = mutableSetOf<SyncResourceKind>()
         database.transaction {
-            remote.categories.forEach { item -> applyOrIgnore(CATEGORY, item.uid, item.ver, { applyCategory(item) }, { applied++ }, { ignored++ }) }
-            remote.tasks.forEach { item -> applyOrIgnore(TASK, item.uid, item.ver, { applyTask(item) }, { applied++ }, { ignored++ }) }
-            remote.habits.forEach { item -> applyOrIgnore(HABIT, item.uid, item.ver, { applyHabit(item) }, { applied++ }, { ignored++ }) }
-            remote.captures.forEach { item -> applyOrIgnore(CAPTURE, item.uid, item.ver, { applyCapture(item) }, { applied++ }, { ignored++ }) }
-            remote.memoryFragments.forEach { item -> applyOrIgnore(MEMORY, item.uid, item.ver, { applyMemory(item) }, { applied++ }, { ignored++ }) }
-            remote.userProfiles.forEach { item -> applyOrIgnore(PROFILE, item.uid, item.ver, { applyProfile(item) }, { applied++ }, { ignored++ }) }
+            remote.categories.forEach { item -> applyOrIgnore(CATEGORY, item.uid, item.ver, { applyCategory(item) }, { applied++; appliedResources += SyncResourceKind.CATEGORY }, { ignored++ }) }
+            remote.tasks.forEach { item -> applyOrIgnore(TASK, item.uid, item.ver, { applyTask(item) }, { applied++; appliedResources += SyncResourceKind.TASK }, { ignored++ }) }
+            remote.habits.forEach { item -> applyOrIgnore(HABIT, item.uid, item.ver, { applyHabit(item) }, { applied++; appliedResources += SyncResourceKind.HABIT }, { ignored++ }) }
+            remote.captures.forEach { item -> applyOrIgnore(CAPTURE, item.uid, item.ver, { applyCapture(item) }, { applied++; appliedResources += SyncResourceKind.CAPTURE }, { ignored++ }) }
+            remote.memoryFragments.forEach { item -> applyOrIgnore(MEMORY, item.uid, item.ver, { applyMemory(item) }, { applied++; appliedResources += SyncResourceKind.MEMORY }, { ignored++ }) }
+            remote.userProfiles.forEach { item -> applyOrIgnore(PROFILE, item.uid, item.ver, { applyProfile(item) }, { applied++; appliedResources += SyncResourceKind.PROFILE }, { ignored++ }) }
         }
-        return SnapshotV3MergeResult(export(), applied, ignored)
+        return SnapshotV3MergeResult(export(), applied, ignored, appliedResources)
     }
 
     private fun applyCategory(item: SnapshotV3CategoryItem) {
@@ -125,6 +134,14 @@ class SnapshotV3Store(
             val value = document.habit
             database.habitQueries.insertHabit(value.uid, value.name, value.description, value.color?.toLong(), value.iconKey, value.categoryUid, value.period.name, value.timesPerPeriod.toLong(), value.goalType.name, value.totalTarget?.toLong(), value.status.name, value.sortOrder.toLong(), value.reminder?.localTime, value.reminder?.isEnabled?.asLong(), value.createdAt, value.updatedAt, 0)
             database.habitQueries.updateHabit(value.name, value.description, value.color?.toLong(), value.iconKey, value.categoryUid, value.period.name, value.timesPerPeriod.toLong(), value.goalType.name, value.totalTarget?.toLong(), value.status.name, value.sortOrder.toLong(), value.reminder?.localTime, value.reminder?.isEnabled?.asLong(), value.updatedAt, 0, value.uid)
+            val incomingRecordUids = document.records.mapTo(mutableSetOf(), HabitRecord::uid)
+            database.habitRecordQueries.selectForHabit(value.uid, ::record).executeAsList()
+                .filter { it.uid !in incomingRecordUids }
+                .forEach { database.habitRecordQueries.softDeleteHabitRecord(item.ver.ts, it.uid) }
+            val incomingScheduleUids = document.scheduleItems.mapTo(mutableSetOf(), HabitScheduleItem::uid)
+            database.habitScheduleQueries.selectForHabit(value.uid, ::schedule).executeAsList()
+                .filter { it.uid !in incomingScheduleUids }
+                .forEach { database.habitScheduleQueries.softDeleteHabitSchedule(item.ver.ts, it.uid) }
             document.records.forEach(::saveRecord)
             document.scheduleItems.forEach(::saveSchedule)
         }
@@ -230,4 +247,5 @@ data class SnapshotV3MergeResult(
     val snapshot: SnapshotV3Root,
     val remoteApplied: Int,
     val remoteIgnored: Int,
+    val appliedResources: Set<SyncResourceKind> = emptySet(),
 )

@@ -38,6 +38,7 @@ class ChangeLogSyncFacade(
                 pendingIdsPayload = "[]",
                 remoteApplied = merged.remoteApplied,
                 remoteIgnored = merged.remoteIgnored,
+                appliedResources = merged.appliedResources,
             )
         } catch (error: Throwable) {
             return failure("Failed to merge V3 snapshot", error)
@@ -72,5 +73,6 @@ data class ChangeLogSyncMergeResult(
     val pendingIdsPayload: String,
     val remoteApplied: Int,
     val remoteIgnored: Int,
+    val appliedResources: Set<SyncResourceKind> = emptySet(),
     val failureMessage: String? = null,
 )

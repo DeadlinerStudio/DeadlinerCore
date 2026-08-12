@@ -14,6 +14,7 @@ import com.deadliner.domain.habit.HabitStatusAction
 import com.deadliner.domain.habit.HabitActionOutcome
 import com.deadliner.platform.PlatformIdentity
 import com.deadliner.model.ChangeOperation
+import com.deadliner.sync.RepositoryMutationNotifier
 import kotlinx.datetime.DatePeriod
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.minus
@@ -26,6 +27,7 @@ class HabitRepository(
     private val database: AppDatabase,
     private val changeLog: ChangeLogRepository,
     private val json: Json = Json,
+    private val mutationNotifier: RepositoryMutationNotifier = RepositoryMutationNotifier.NONE,
 ) {
     fun list(): List<Habit> = database.habitQueries.selectAll(::toHabit).executeAsList()
     fun find(uid: String): Habit? = database.habitQueries.selectByUid(uid, ::toHabit).executeAsOneOrNull()
@@ -65,6 +67,7 @@ class HabitRepository(
                 writeRecord(record, ChangeOperation.INSERT)
             }
         }
+        mutationNotifier.notifyMutation()
         return HabitActionResult(find(habitUid), HabitActionOutcome.APPLIED)
     }
 
@@ -73,6 +76,7 @@ class HabitRepository(
         database.transaction {
             records(habitUid).filter { it.occurredOn == occurredOn }.forEach { softDeleteRecord(it, occurredAt) }
         }
+        mutationNotifier.notifyMutation()
         return HabitActionResult(habit, HabitActionOutcome.APPLIED)
     }
 
@@ -89,12 +93,14 @@ class HabitRepository(
             database.habitQueries.softDeleteHabit(updatedAt, uid)
             changeLog.appendLocal("habit", uid, ChangeOperation.DELETE, null)
         }
+        mutationNotifier.notifyMutation()
     }
 
     fun saveRecord(record: HabitRecord, operation: ChangeOperation = ChangeOperation.UPDATE) {
         database.transaction {
             writeRecord(record, operation)
         }
+        mutationNotifier.notifyMutation()
     }
 
     fun saveSchedule(item: HabitScheduleItem, operation: ChangeOperation = ChangeOperation.UPDATE) {
@@ -107,10 +113,12 @@ class HabitRepository(
             )
             changeLog.appendLocal("habit_schedule_item", item.uid, operation, json.encodeToJsonElement(item).jsonObject)
         }
+        mutationNotifier.notifyMutation()
     }
 
     private fun save(habit: Habit, operation: ChangeOperation) {
         database.transaction {
+            database.ensureCategoryReference(habit.categoryUid, habit.updatedAt)
             database.habitQueries.insertHabit(
                 habit.uid, habit.name, habit.description, habit.color?.toLong(), habit.iconKey, habit.categoryUid,
                 habit.period.name, habit.timesPerPeriod.toLong(), habit.goalType.name, habit.totalTarget?.toLong(),
@@ -125,6 +133,7 @@ class HabitRepository(
             )
             changeLog.appendLocal("habit", habit.uid, operation, json.encodeToJsonElement(habit).jsonObject)
         }
+        mutationNotifier.notifyMutation()
     }
 
     private fun writeRecord(record: HabitRecord, operation: ChangeOperation) {

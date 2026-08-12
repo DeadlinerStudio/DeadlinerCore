@@ -2,6 +2,10 @@ selectForHabit:
 SELECT uid, habit_uid, occurred_on, count, status, created_at, updated_at, is_deleted
 FROM habit_record WHERE habit_uid = ? AND is_deleted = 0 ORDER BY occurred_on DESC, created_at DESC;
 
+selectAllForHabit:
+SELECT uid, habit_uid, occurred_on, count, status, created_at, updated_at, is_deleted
+FROM habit_record WHERE habit_uid = ? ORDER BY occurred_on DESC, created_at DESC;
+
 selectAll:
 SELECT uid, habit_uid, occurred_on, count, status, created_at, updated_at, is_deleted
 FROM habit_record WHERE is_deleted = 0 ORDER BY habit_uid, occurred_on DESC, created_at DESC;

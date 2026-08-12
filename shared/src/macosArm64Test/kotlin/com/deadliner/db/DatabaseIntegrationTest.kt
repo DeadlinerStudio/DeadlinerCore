@@ -1,6 +1,7 @@
 package com.deadliner.db
 
 import com.deadliner.domain.category.Category
+import com.deadliner.domain.category.CategoryPresets
 import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.capture.CaptureSource
 import com.deadliner.domain.habit.Habit
@@ -15,6 +16,7 @@ import com.deadliner.domain.task.TaskActionOutcome
 import com.deadliner.domain.task.TaskSubtask
 import com.deadliner.model.ChangeOperation
 import com.deadliner.sync.ChangeLogSyncPayload
+import com.deadliner.sync.SyncResourceKind
 import com.deadliner.sync.snapshot.SnapshotV3EntityVersion
 import com.deadliner.sync.snapshot.SnapshotV3CategoryItem
 import com.deadliner.sync.snapshot.SnapshotV3Root
@@ -24,6 +26,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -32,6 +35,137 @@ import platform.Foundation.NSTemporaryDirectory
 import platform.posix.remove
 
 class DatabaseIntegrationTest {
+    @Test
+    fun captureSnapshotAppliesAcrossDevicesAndReportsCaptureResource() {
+        val sourcePath = "${NSTemporaryDirectory()}deadliner-capture-sync-source-${NSUUID().UUIDString}.db"
+        val targetPath = "${NSTemporaryDirectory()}deadliner-capture-sync-target-${NSUUID().UUIDString}.db"
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath, "ohos-test-device"))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath, "ios-test-device"))
+        try {
+            val capture = CaptureItem(
+                uid = "capture.cross-device",
+                text = "修脚下周二去复查",
+                source = CaptureSource.MANUAL,
+                createdAt = "2026-08-11T04:15:25Z",
+                updatedAt = "2026-08-11T04:15:25Z",
+            )
+            source.captures.create(capture)
+
+            val result = target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+
+            assertEquals(capture, target.captures.find(capture.uid))
+            assertTrue(SyncResourceKind.CAPTURE in result.appliedResources)
+        } finally {
+            source.close()
+            target.close()
+            remove(sourcePath)
+            remove(targetPath)
+        }
+    }
+
+    @Test
+    fun habitCheckInAndCancellationAdvanceAggregateVersionAcrossDevices() {
+        val sourcePath = "${NSTemporaryDirectory()}deadliner-habit-sync-source-${NSUUID().UUIDString}.db"
+        val targetPath = "${NSTemporaryDirectory()}deadliner-habit-sync-target-${NSUUID().UUIDString}.db"
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath, "ohos-test-device"))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath, "ios-test-device"))
+        try {
+            val habit = Habit(
+                uid = "habit.cross-device",
+                name = "GRE 背单词",
+                period = HabitPeriod.DAILY,
+                createdAt = "2026-08-12T04:52:36Z",
+                updatedAt = "2026-08-12T04:52:36Z",
+            )
+            source.habits.create(habit)
+            target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+            assertTrue(target.habits.records(habit.uid).isEmpty())
+
+            source.habits.saveRecord(
+                HabitRecord(
+                    uid = "record.ohos",
+                    habitUid = habit.uid,
+                    occurredOn = "2026-08-12",
+                    createdAt = "2026-08-12T13:00:24Z",
+                    updatedAt = "2026-08-12T13:00:24Z",
+                ),
+                ChangeOperation.INSERT,
+            )
+            val checkedInPayload = source.sync.mergeRemotePayload(null).payload
+            val checkedInSnapshot = requireNotNull(Json.decodeFromString<ChangeLogSyncPayload>(checkedInPayload).snapshot)
+            assertEquals(
+                "2026-08-12T13:00:24Z",
+                checkedInSnapshot.habits.single { it.uid == habit.uid }.ver.ts,
+            )
+
+            target.sync.mergeRemotePayload(checkedInPayload)
+            assertEquals(listOf("record.ohos"), target.habits.records(habit.uid).map { it.uid })
+
+            source.habits.clearRecords(habit.uid, "2026-08-12", "2026-08-12T14:00:00Z")
+            val cancelledPayload = source.sync.mergeRemotePayload(null).payload
+            val cancelledSnapshot = requireNotNull(Json.decodeFromString<ChangeLogSyncPayload>(cancelledPayload).snapshot)
+            val cancelledHabit = cancelledSnapshot.habits.single { it.uid == habit.uid }
+            assertEquals("2026-08-12T14:00:00Z", cancelledHabit.ver.ts)
+            assertTrue(cancelledHabit.doc?.records?.isEmpty() == true)
+
+            target.sync.mergeRemotePayload(cancelledPayload)
+            assertTrue(target.habits.records(habit.uid).isEmpty())
+        } finally {
+            source.close()
+            target.close()
+            remove(sourcePath)
+            remove(targetPath)
+        }
+    }
+
+    @Test
+    fun categoryPresetsSeedOnceAndRestoreWithoutOverwritingLiveEdits() {
+        val path = "${NSTemporaryDirectory()}deadliner-category-presets-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            assertEquals(CategoryPresets.all.map { it.uid }, database.categories.list().map { it.uid })
+
+            val edited = requireNotNull(database.categories.find("preset.work")).copy(
+                name = "我的工作",
+                updatedAt = NOW,
+            )
+            database.categories.update(edited)
+            database.categories.softDelete("preset.study", NOW)
+
+            val restored = database.categories.restorePresets()
+
+            assertEquals("我的工作", database.categories.find("preset.work")?.name)
+            val restoredStudy = requireNotNull(database.categories.find("preset.study"))
+            assertFalse(restoredStudy.isDeleted)
+            assertEquals(CategoryPresets.all.first { it.uid == "preset.study" }.name, restoredStudy.name)
+            assertEquals(8, restored.size)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun deletingAllCategoriesDoesNotSeedPresetsAgainOnReopen() {
+        val path = "${NSTemporaryDirectory()}deadliner-category-presets-reopen-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            database.categories.list().forEach { category ->
+                database.categories.softDelete(category.uid, NOW)
+            }
+        } finally {
+            database.close()
+        }
+
+        val reopened = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            assertTrue(reopened.categories.list().isEmpty())
+        } finally {
+            reopened.close()
+            remove(path)
+        }
+    }
+
     @Test
     fun snapshotRestoresTaskWhenIncrementalLogDoesNotContainIt() {
         val path = "${NSTemporaryDirectory()}deadliner-snapshot-${NSUUID().UUIDString}.db"

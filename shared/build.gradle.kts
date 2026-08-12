@@ -129,8 +129,12 @@ sqldelight {
 val harmonyEntryDirectory = rootProject.projectDir.resolve("../../HarmonyOS/Deadliner/entry")
 
 tasks.register<Copy>("publishDebugOhosLibraryToDeadliner") {
-    dependsOn("linkDebugSharedOhosArm64")
-    from(layout.buildDirectory.file("bin/ohosArm64/debugShared/libDeadlinerCore.so"))
+    // The Kotlin/Native debug runtime leaves symbols unresolved in an ArkTS
+    // process (including Kotlin_Interop_CreateObjCObjectHolder).  The host
+    // application may itself be a debug HAP, but it must package the fully
+    // linked release KMP shared library.
+    dependsOn("linkReleaseSharedOhosArm64")
+    from(layout.buildDirectory.file("bin/ohosArm64/releaseShared/libDeadlinerCore.so"))
     into(harmonyEntryDirectory.resolve("libs/arm64-v8a"))
 }
 

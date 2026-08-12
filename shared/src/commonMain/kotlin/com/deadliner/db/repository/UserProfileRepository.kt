@@ -4,6 +4,7 @@ import com.deadliner.db.AppDatabase
 import com.deadliner.domain.account.UserProfile
 import com.deadliner.domain.account.UserTier
 import com.deadliner.model.ChangeOperation
+import com.deadliner.sync.RepositoryMutationNotifier
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -12,6 +13,7 @@ class UserProfileRepository(
     private val database: AppDatabase,
     private val changeLog: ChangeLogRepository,
     private val json: Json = Json,
+    private val mutationNotifier: RepositoryMutationNotifier = RepositoryMutationNotifier.NONE,
 ) {
     fun list(): List<UserProfile> = database.userProfileQueries.selectAll(::toProfile).executeAsList()
 
@@ -27,6 +29,7 @@ class UserProfileRepository(
             database.userProfileQueries.softDeleteUserProfile(updatedAt, uid)
             changeLog.appendLocal("user_profile", uid, ChangeOperation.DELETE, null)
         }
+        mutationNotifier.notifyMutation()
     }
 
     fun getProfile(): String? {
@@ -63,6 +66,7 @@ class UserProfileRepository(
             )
             changeLog.appendLocal("user_profile", profile.uid, operation, json.encodeToJsonElement(profile).jsonObject)
         }
+        mutationNotifier.notifyMutation()
     }
 
     private fun toProfile(

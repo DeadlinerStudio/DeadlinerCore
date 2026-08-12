@@ -29,6 +29,28 @@ On an Apple Silicon Mac, run the real SQLite integration suite with:
 bash runscript/testMacDatabase.sh
 ```
 
+### One-command local deployment
+
+Build every release binary and put it directly in the matching local client
+repository with:
+
+```bash
+runscript/buildAndDeploy.sh
+```
+
+The zero-argument command auto-detects the sibling repositories linked under
+`ProjectDeadliner` and deploys verified outputs to:
+
+- Android: `Deadliner/.deadliner-core/kmp/deadliner-core.aar`
+- iOS: `Deadliner-iOS/Vendor/KMP/shared.xcframework`
+- HarmonyOS: `DeadlinerNEXT/entry/libs/arm64-v8a/libDeadlinerCore.so`
+
+Each destination is replaced only after the new artifact has been fully staged;
+the script then compares it with the build output. Use `--dry-run` to inspect the
+resolved paths, `--no-build` to redeploy existing outputs, or `--skip-android`,
+`--skip-ios`, and `--skip-harmony` for a partial run. Repository locations can be
+overridden with the corresponding `--*-repo PATH` option.
+
 ## Phase 1/2 acceptance
 
 Run the repeatable shared-core acceptance matrix with:

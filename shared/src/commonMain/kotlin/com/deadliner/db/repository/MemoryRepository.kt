@@ -3,6 +3,7 @@ package com.deadliner.db.repository
 import com.deadliner.db.AppDatabase
 import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.model.ChangeOperation
+import com.deadliner.sync.RepositoryMutationNotifier
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -11,6 +12,7 @@ class MemoryRepository(
     private val database: AppDatabase,
     private val changeLog: ChangeLogRepository,
     private val json: Json = Json,
+    private val mutationNotifier: RepositoryMutationNotifier = RepositoryMutationNotifier.NONE,
 ) {
     fun list(): List<MemoryFragment> = database.memoryQueries.selectAll(::toMemory).executeAsList()
 
@@ -26,6 +28,7 @@ class MemoryRepository(
             database.memoryQueries.softDeleteMemory(updatedAt, uid)
             changeLog.appendLocal("memory_fragment", uid, ChangeOperation.DELETE, null)
         }
+        mutationNotifier.notifyMutation()
     }
 
     fun replaceAll(fragments: List<MemoryFragment>) {
@@ -46,6 +49,7 @@ class MemoryRepository(
                 )
             }
         }
+        mutationNotifier.notifyMutation()
     }
 
     fun appendConversationTurn(role: String, content: String) {
@@ -90,6 +94,7 @@ class MemoryRepository(
             )
             changeLog.appendLocal("memory_fragment", fragment.uid, operation, json.encodeToJsonElement(fragment).jsonObject)
         }
+        mutationNotifier.notifyMutation()
     }
 
     private fun toMemory(
