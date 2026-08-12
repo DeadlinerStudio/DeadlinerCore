@@ -58,14 +58,30 @@ actual class NotificationService(private val context: Context) : NotificationGat
 
     actual override fun cancelAllHabitNotifications() = cancelRemembered(HABIT_KEYS, ::cancelHabitNotification)
 
-    actual override fun setDailySummaryNotification(config: DailySummaryConfig) = Unit
-    actual override fun cancelDailySummaryNotification() = Unit
+    actual override fun setDailySummaryNotification(config: DailySummaryConfig) {
+        cancelDailySummaryNotification()
+        val time = runCatching { LocalTime.parse(config.time) }.getOrNull() ?: return
+        val now = LocalDateTime.now()
+        var trigger = now.toLocalDate().atTime(time)
+        if (!trigger.isAfter(now)) trigger = trigger.plusDays(1)
+        schedule(
+            DAILY_UID,
+            DAILY_REQUEST_OFFSET,
+            trigger.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+            Intent(ACTION_DAILY).setPackage(context.packageName),
+        )
+    }
+
+    actual override fun cancelDailySummaryNotification() {
+        cancel(DAILY_UID, DAILY_REQUEST_OFFSET, Intent(ACTION_DAILY).setPackage(context.packageName))
+    }
     actual override fun setUpcomingLiveUpdate(config: UpcomingLiveUpdateConfig) = Unit
     actual override fun cancelUpcomingLiveUpdate(taskUid: String) = Unit
 
     actual override fun cancelAll() {
         cancelAllTaskNotifications()
         cancelAllHabitNotifications()
+        cancelDailySummaryNotification()
     }
 
     actual override fun refreshAll(tasks: List<TaskNotificationInfo>, habits: List<HabitNotificationInfo>) {
@@ -120,6 +136,7 @@ actual class NotificationService(private val context: Context) : NotificationGat
     companion object {
         const val ACTION_TASK = "com.deadliner.kmp.notification.TASK"
         const val ACTION_HABIT = "com.deadliner.kmp.notification.HABIT"
+        const val ACTION_DAILY = "com.deadliner.kmp.notification.DAILY"
         const val EXTRA_UID = "com.deadliner.kmp.notification.UID"
         const val EXTRA_TITLE = "com.deadliner.kmp.notification.TITLE"
         private const val PREFERENCES = "kmp_notification_schedule"
@@ -127,5 +144,7 @@ actual class NotificationService(private val context: Context) : NotificationGat
         private const val HABIT_KEYS = "habits"
         private const val TASK_REQUEST_OFFSET = 210_000
         private const val HABIT_REQUEST_OFFSET = 310_000
+        private const val DAILY_REQUEST_OFFSET = 410_000
+        private const val DAILY_UID = "daily-summary"
     }
 }
