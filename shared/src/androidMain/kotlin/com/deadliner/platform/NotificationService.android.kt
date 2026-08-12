@@ -1,222 +1,131 @@
 package com.deadliner.platform
 
 import android.app.AlarmManager
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
-import kotlinx.datetime.DayOfWeek
+import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.OffsetDateTime
+import java.time.ZoneId
 
-/**
- * Android NotificationService actual 实现。
- *
- * 使用 AlarmManager + NotificationManager 实现通知调度。
- */
+/** Android scheduling boundary. Notification content and actions remain app-owned. */
 actual class NotificationService(private val context: Context) : NotificationGateway {
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-    private val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-    init {
-        createNotificationChannels()
-    }
-
-    // ===== 任务通知 =====
+    private val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
     actual override fun setTaskNotification(config: TaskNotificationConfig) {
-        val intent = createTaskIntent(config.taskUid)
-        val pendingIntent = createPendingIntent("TASK_${config.taskUid}", intent)
-
-        // 计算触发时间（简化实现）
-        val triggerTime = System.currentTimeMillis() + config.reminderMinutes * 60 * 1000
-
-        alarmManager.setAlarmClock(
-            AlarmManager.AlarmClockInfo(triggerTime, pendingIntent),
-            pendingIntent,
-        )
+        cancelTaskNotification(config.taskUid)
+        val dueMillis = parseDateTime(config.dueAt)?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli() ?: return
+        val triggerMillis = dueMillis - config.reminderMinutes * 60_000L
+        if (triggerMillis <= System.currentTimeMillis()) return
+        val intent = Intent(ACTION_TASK).setPackage(context.packageName)
+            .putExtra(EXTRA_UID, config.taskUid)
+            .putExtra(EXTRA_TITLE, config.title)
+        schedule(config.taskUid, TASK_REQUEST_OFFSET, triggerMillis, intent)
+        remember(TASK_KEYS, config.taskUid)
     }
 
     actual override fun cancelTaskNotification(taskUid: String) {
-        val intent = createTaskIntent(taskUid)
-        val pendingIntent = createPendingIntent("TASK_$taskUid", intent)
-        alarmManager.cancel(pendingIntent)
+        cancel(taskUid, TASK_REQUEST_OFFSET, Intent(ACTION_TASK).setPackage(context.packageName).putExtra(EXTRA_UID, taskUid))
+        forget(TASK_KEYS, taskUid)
     }
 
-    actual override fun cancelAllTaskNotifications() {
-        // Android 无法直接取消所有任务通知，需要逐个取消
-        // 简化实现：no-op
-    }
-
-    // ===== 习惯通知 =====
+    actual override fun cancelAllTaskNotifications() = cancelRemembered(TASK_KEYS, ::cancelTaskNotification)
 
     actual override fun setHabitNotification(config: HabitNotificationConfig) {
-        val intent = createHabitIntent(config.habitUid)
-        val pendingIntent = createPendingIntent("HABIT_${config.habitUid}", intent)
-
-        // 解析 alarmTime (HH:mm)
-        val parts = config.alarmTime.split(":")
-        val hour = parts.getOrNull(0)?.toIntOrNull() ?: 8
-        val minute = parts.getOrNull(1)?.toIntOrNull() ?: 0
-
-        // 计算到下一个提醒时间的毫秒数（简化实现）
-        val now = System.currentTimeMillis()
-        val triggerTime = now + 24 * 60 * 60 * 1000L // 每天
-
-        alarmManager.setAlarmClock(
-            AlarmManager.AlarmClockInfo(triggerTime, pendingIntent),
-            pendingIntent,
+        cancelHabitNotification(config.habitUid)
+        val time = runCatching { LocalTime.parse(config.alarmTime) }.getOrNull() ?: return
+        val now = LocalDateTime.now()
+        var trigger = now.toLocalDate().atTime(time)
+        if (!trigger.isAfter(now)) trigger = trigger.plusDays(1)
+        val intent = Intent(ACTION_HABIT).setPackage(context.packageName)
+            .putExtra(EXTRA_UID, config.habitUid)
+            .putExtra(EXTRA_TITLE, config.name)
+        schedule(
+            config.habitUid,
+            HABIT_REQUEST_OFFSET,
+            trigger.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+            intent,
         )
+        remember(HABIT_KEYS, config.habitUid)
     }
 
     actual override fun cancelHabitNotification(habitUid: String) {
-        val intent = createHabitIntent(habitUid)
-        val pendingIntent = createPendingIntent("HABIT_$habitUid", intent)
-        alarmManager.cancel(pendingIntent)
+        cancel(habitUid, HABIT_REQUEST_OFFSET, Intent(ACTION_HABIT).setPackage(context.packageName).putExtra(EXTRA_UID, habitUid))
+        forget(HABIT_KEYS, habitUid)
     }
 
-    actual override fun cancelAllHabitNotifications() {
-        // Android 无法直接取消所有习惯通知，需要逐个取消
-        // 简化实现：no-op
-    }
+    actual override fun cancelAllHabitNotifications() = cancelRemembered(HABIT_KEYS, ::cancelHabitNotification)
 
-    // ===== 每日统计通知 =====
-
-    actual override fun setDailySummaryNotification(config: DailySummaryConfig) {
-        val intent = createDailySummaryIntent()
-        val pendingIntent = createPendingIntent("DAILY_SUMMARY", intent)
-
-        // 解析 time (HH:mm)
-        val parts = config.time.split(":")
-        val hour = parts.getOrNull(0)?.toIntOrNull() ?: 20
-        val minute = parts.getOrNull(1)?.toIntOrNull() ?: 0
-
-        // 每天触发
-        val now = System.currentTimeMillis()
-        val triggerTime = now + 24 * 60 * 60 * 1000L
-
-        alarmManager.setAlarmClock(
-            AlarmManager.AlarmClockInfo(triggerTime, pendingIntent),
-            pendingIntent,
-        )
-    }
-
-    actual override fun cancelDailySummaryNotification() {
-        val intent = createDailySummaryIntent()
-        val pendingIntent = createPendingIntent("DAILY_SUMMARY", intent)
-        alarmManager.cancel(pendingIntent)
-    }
-
-    // ===== 即将到期实时更新 =====
-
-    actual override fun setUpcomingLiveUpdate(config: UpcomingLiveUpdateConfig) {
-        // Android 支持前台服务实时更新
-        // 简化实现：使用普通通知
-        val intent = createTaskIntent(config.taskUid)
-        val pendingIntent = createPendingIntent("UPCOMING_${config.taskUid}", intent)
-
-        val triggerTime = System.currentTimeMillis() + config.updateIntervalSeconds * 1000L
-
-        alarmManager.setAlarmClock(
-            AlarmManager.AlarmClockInfo(triggerTime, pendingIntent),
-            pendingIntent,
-        )
-    }
-
-    actual override fun cancelUpcomingLiveUpdate(taskUid: String) {
-        val intent = createTaskIntent(taskUid)
-        val pendingIntent = createPendingIntent("UPCOMING_$taskUid", intent)
-        alarmManager.cancel(pendingIntent)
-    }
-
-    // ===== 通用 =====
+    actual override fun setDailySummaryNotification(config: DailySummaryConfig) = Unit
+    actual override fun cancelDailySummaryNotification() = Unit
+    actual override fun setUpcomingLiveUpdate(config: UpcomingLiveUpdateConfig) = Unit
+    actual override fun cancelUpcomingLiveUpdate(taskUid: String) = Unit
 
     actual override fun cancelAll() {
-        alarmManager.cancelAll()
+        cancelAllTaskNotifications()
+        cancelAllHabitNotifications()
     }
 
     actual override fun refreshAll(tasks: List<TaskNotificationInfo>, habits: List<HabitNotificationInfo>) {
-        // 先取消所有通知
         cancelAll()
-
-        // 重新调度任务通知
-        tasks.filter { it.state == "active" && it.dueAt != null }.forEach { task ->
-            setTaskNotification(
-                TaskNotificationConfig(
-                    taskUid = task.uid,
-                    title = task.title,
-                    dueAt = task.dueAt!!,
-                )
-            )
+        tasks.filter { it.state.equals("active", true) }.forEach { task ->
+            task.dueAt?.let { due -> setTaskNotification(TaskNotificationConfig(task.uid, task.title, due)) }
         }
-
-        // 重新调度习惯通知
-        habits.filter { it.status == "active" && it.alarmTime != null }.forEach { habit ->
-            setHabitNotification(
-                HabitNotificationConfig(
-                    habitUid = habit.uid,
-                    name = habit.name,
-                    alarmTime = habit.alarmTime!!,
-                )
-            )
+        habits.filter { it.status.equals("active", true) }.forEach { habit ->
+            habit.alarmTime?.let { time -> setHabitNotification(HabitNotificationConfig(habit.uid, habit.name, time)) }
         }
     }
 
-    // ===== 辅助方法 =====
-
-    private fun createNotificationChannels() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val taskChannel = NotificationChannel(
-                "TASK_CHANNEL",
-                "任务提醒",
-                NotificationManager.IMPORTANCE_HIGH,
-            ).apply {
-                description = "任务到期提醒"
-            }
-
-            val habitChannel = NotificationChannel(
-                "HABIT_CHANNEL",
-                "习惯提醒",
-                NotificationManager.IMPORTANCE_DEFAULT,
-            ).apply {
-                description = "习惯打卡提醒"
-            }
-
-            val summaryChannel = NotificationChannel(
-                "SUMMARY_CHANNEL",
-                "每日总结",
-                NotificationManager.IMPORTANCE_LOW,
-            ).apply {
-                description = "每日任务总结"
-            }
-
-            notificationManager.createNotificationChannel(taskChannel)
-            notificationManager.createNotificationChannel(habitChannel)
-            notificationManager.createNotificationChannel(summaryChannel)
-        }
-    }
-
-    private fun createTaskIntent(taskUid: String): Intent {
-        // 简化实现：返回空 Intent
-        return Intent()
-    }
-
-    private fun createHabitIntent(habitUid: String): Intent {
-        // 简化实现：返回空 Intent
-        return Intent()
-    }
-
-    private fun createDailySummaryIntent(): Intent {
-        // 简化实现：返回空 Intent
-        return Intent()
-    }
-
-    private fun createPendingIntent(key: String, intent: Intent): PendingIntent {
-        return PendingIntent.getActivity(
+    private fun schedule(uid: String, offset: Int, triggerMillis: Long, intent: Intent) {
+        val pending = PendingIntent.getBroadcast(
             context,
-            key.hashCode(),
+            offset + uid.hashCode(),
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        if (alarmManager.canScheduleExactAlarms()) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerMillis, pending)
+        } else {
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerMillis, pending)
+        }
+    }
+
+    private fun cancel(uid: String, offset: Int, intent: Intent) {
+        PendingIntent.getBroadcast(
+            context,
+            offset + uid.hashCode(),
+            intent,
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+        )?.let { pending -> alarmManager.cancel(pending); pending.cancel() }
+    }
+
+    private fun remember(key: String, uid: String) {
+        preferences.edit().putStringSet(key, preferences.getStringSet(key, emptySet()).orEmpty() + uid).apply()
+    }
+
+    private fun forget(key: String, uid: String) {
+        preferences.edit().putStringSet(key, preferences.getStringSet(key, emptySet()).orEmpty() - uid).apply()
+    }
+
+    private fun cancelRemembered(key: String, cancelOne: (String) -> Unit) {
+        preferences.getStringSet(key, emptySet()).orEmpty().toList().forEach(cancelOne)
+    }
+
+    private fun parseDateTime(raw: String): LocalDateTime? =
+        runCatching { LocalDateTime.parse(raw) }.getOrNull()
+            ?: runCatching { OffsetDateTime.parse(raw).toLocalDateTime() }.getOrNull()
+
+    companion object {
+        const val ACTION_TASK = "com.deadliner.kmp.notification.TASK"
+        const val ACTION_HABIT = "com.deadliner.kmp.notification.HABIT"
+        const val EXTRA_UID = "com.deadliner.kmp.notification.UID"
+        const val EXTRA_TITLE = "com.deadliner.kmp.notification.TITLE"
+        private const val PREFERENCES = "kmp_notification_schedule"
+        private const val TASK_KEYS = "tasks"
+        private const val HABIT_KEYS = "habits"
+        private const val TASK_REQUEST_OFFSET = 210_000
+        private const val HABIT_REQUEST_OFFSET = 310_000
     }
 }
