@@ -12,6 +12,7 @@ import com.deadliner.platform.UpcomingLiveUpdateConfig
 import com.deadliner.service.NotificationOrchestrator
 import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskAction
+import com.deadliner.domain.task.TaskState
 import com.deadliner.viewmodel.task.TaskCreateConfig
 import com.deadliner.viewmodel.task.TaskListViewModel
 import kotlinx.coroutines.CoroutineScope
@@ -27,6 +28,27 @@ import platform.Foundation.NSTemporaryDirectory
 import platform.posix.remove
 
 class TaskListViewModelIntegrationTest {
+    @Test
+    fun filteredTasksKeepActionableAndStarredTasksAheadOfDueDate() {
+        val path = "${NSTemporaryDirectory()}deadliner-viewmodel-sort-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            val viewModel = TaskListViewModel(taskRepository = database.tasks)
+            listOf(
+                Task("completed", "Completed", dueAt = "2026-08-01T08:00:00Z", state = TaskState.COMPLETED, createdAt = "2026-08-01T00:00:00Z", updatedAt = "2026-08-01T00:00:00Z"),
+                Task("normal", "Normal", dueAt = "2026-08-02T08:00:00Z", createdAt = "2026-08-01T00:00:01Z", updatedAt = "2026-08-01T00:00:01Z"),
+                Task("starred", "Starred", dueAt = "2026-08-03T08:00:00Z", isStarred = true, createdAt = "2026-08-01T00:00:02Z", updatedAt = "2026-08-01T00:00:02Z"),
+            ).forEach(database.tasks::create)
+
+            viewModel.loadNow()
+
+            assertEquals(listOf("starred", "normal", "completed"), viewModel.getFilteredTasks().map(Task::uid))
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
     @Test
     fun pullBridgeIntentsUseViewModelStateForFullFidelityTasks() {
         val path = "${NSTemporaryDirectory()}deadliner-viewmodel-pull-${NSUUID().UUIDString}.db"

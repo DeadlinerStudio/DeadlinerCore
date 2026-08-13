@@ -38,9 +38,12 @@ class SearchViewModel(
                 val tasks = taskRepository.list()
                 val habits = habitRepository.list()
                 _uiState.update {
+                    val matches = match(it.query, tasks, habits)
                     it.copy(
                         allTasks = tasks,
                         allHabits = habits,
+                        matchedTasks = matches.first,
+                        matchedHabits = matches.second,
                         isLoading = false,
                         error = null,
                     )
@@ -69,15 +72,11 @@ class SearchViewModel(
             return
         }
 
-        val lowerQuery = query.lowercase()
-        val matchedTasks = _uiState.value.allTasks.filter { task ->
-            task.title.lowercase().contains(lowerQuery) ||
-                task.note.lowercase().contains(lowerQuery)
-        }
-        val matchedHabits = _uiState.value.allHabits.filter { habit ->
-            habit.name.lowercase().contains(lowerQuery) ||
-                (habit.description?.lowercase()?.contains(lowerQuery) ?: false)
-        }
+        val (matchedTasks, matchedHabits) = match(
+            query,
+            _uiState.value.allTasks,
+            _uiState.value.allHabits,
+        )
 
         _uiState.update {
             it.copy(
@@ -96,6 +95,24 @@ class SearchViewModel(
                 matchedHabits = emptyList(),
             )
         }
+    }
+
+    private fun match(
+        query: String,
+        tasks: List<Task>,
+        habits: List<Habit>,
+    ): Pair<List<Task>, List<Habit>> {
+        val normalized = query.trim().lowercase()
+        if (normalized.isEmpty()) return emptyList<Task>() to emptyList()
+        val matchedTasks = tasks.filter { task ->
+            task.title.lowercase().contains(normalized) ||
+                task.note.lowercase().contains(normalized)
+        }
+        val matchedHabits = habits.filter { habit ->
+            habit.name.lowercase().contains(normalized) ||
+                (habit.description?.lowercase()?.contains(normalized) ?: false)
+        }
+        return matchedTasks to matchedHabits
     }
 }
 

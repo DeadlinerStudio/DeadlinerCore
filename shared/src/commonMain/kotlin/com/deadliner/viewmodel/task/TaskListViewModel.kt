@@ -59,9 +59,13 @@ class TaskListViewModel(
 
     /** Native pull bridges use the same ViewModel authority without collecting StateFlow. */
     fun loadNow(): TaskListUiState = try {
-        TaskListUiState(tasks = taskRepository.list(), isLoading = false).also { _uiState.value = it }
+        _uiState.value.copy(
+            tasks = taskRepository.list(),
+            isLoading = false,
+            error = null,
+        ).also { _uiState.value = it }
     } catch (error: Exception) {
-        TaskListUiState(isLoading = false, error = error.message).also { _uiState.value = it }
+        _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
     }
 
     /** Full-fidelity intent used by platform editors that already own a stable task UID. */
@@ -190,13 +194,21 @@ class TaskListViewModel(
             TaskFilter.ARCHIVED -> state.tasks.filter { it.state == TaskState.ARCHIVED }
             is TaskFilter.BY_CATEGORY -> state.tasks.filter { it.categoryUid == state.filter.categoryUid }
         }
-        return when (state.sortBy) {
-            TaskSortBy.DUE_DATE -> filtered.sortedBy { it.dueAt }
-            TaskSortBy.CREATED_AT -> filtered.sortedByDescending { it.createdAt }
-            TaskSortBy.PRIORITY -> filtered.sortedByDescending { it.isStarred }
-            TaskSortBy.TITLE -> filtered.sortedBy { it.title }
+        val fieldComparator = when (state.sortBy) {
+            TaskSortBy.DUE_DATE -> compareBy<Task> { it.dueAt.orEmpty() }
+            TaskSortBy.CREATED_AT -> compareByDescending<Task> { it.createdAt }
+            TaskSortBy.PRIORITY -> compareBy<Task> { it.dueAt.orEmpty() }
+            TaskSortBy.TITLE -> compareBy<Task> { it.title.lowercase() }
         }
+        return filtered.sortedWith(
+            compareBy<Task> { !it.state.isActionable() }
+                .thenBy { !it.isStarred }
+                .then(fieldComparator)
+                .thenBy { it.createdAt },
+        )
     }
+
+    private fun TaskState.isActionable(): Boolean = this == TaskState.ACTIVE
 }
 
 // ===== UiState 定义（使用数据类，易于扩展）=====
