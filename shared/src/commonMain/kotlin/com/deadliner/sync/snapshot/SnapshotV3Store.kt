@@ -100,6 +100,31 @@ class SnapshotV3Store(
         return SnapshotV3MergeResult(export(), applied, ignored, appliedResources)
     }
 
+    internal fun replace(snapshot: SnapshotV3Root, afterReplace: () -> Unit = {}) {
+        SnapshotV3Validator.requireValid(snapshot)
+        database.transaction {
+            database.taskSubtaskQueries.deleteAll()
+            database.habitRecordQueries.deleteAll()
+            database.habitScheduleQueries.deleteAll()
+            database.taskQueries.deleteAll()
+            database.habitQueries.deleteAll()
+            database.categoryQueries.deleteAll()
+            database.captureQueries.deleteAll()
+            database.memoryQueries.deleteAll()
+            database.userProfileQueries.deleteAll()
+            database.changeLogQueries.deleteAll()
+            database.legacyV2VersionQueries.deleteAll()
+
+            snapshot.categories.forEach { item -> applyOrIgnore(CATEGORY, item.uid, item.ver, { applyCategory(item) }, {}, {}) }
+            snapshot.tasks.forEach { item -> applyOrIgnore(TASK, item.uid, item.ver, { applyTask(item) }, {}, {}) }
+            snapshot.habits.forEach { item -> applyOrIgnore(HABIT, item.uid, item.ver, { applyHabit(item) }, {}, {}) }
+            snapshot.captures.forEach { item -> applyOrIgnore(CAPTURE, item.uid, item.ver, { applyCapture(item) }, {}, {}) }
+            snapshot.memoryFragments.forEach { item -> applyOrIgnore(MEMORY, item.uid, item.ver, { applyMemory(item) }, {}, {}) }
+            snapshot.userProfiles.forEach { item -> applyOrIgnore(PROFILE, item.uid, item.ver, { applyProfile(item) }, {}, {}) }
+            afterReplace()
+        }
+    }
+
     private fun applyCategory(item: SnapshotV3CategoryItem) {
         if (item.deleted) {
             // Keep a non-visible physical row for foreign-key integrity when an old task still

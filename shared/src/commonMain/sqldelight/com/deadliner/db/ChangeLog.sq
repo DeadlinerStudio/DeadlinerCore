@@ -30,3 +30,6 @@ markSynced:
 UPDATE changelog
 SET synced = 1, server_timestamp = ?
 WHERE id IN ?;
+
+deleteAll:
+DELETE FROM changelog;

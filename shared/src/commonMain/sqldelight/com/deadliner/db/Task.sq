@@ -27,3 +27,6 @@ UPDATE task SET title = ?, note = ?, start_at = ?, due_at = ?, state = ?, comple
 
 softDeleteTask:
 UPDATE task SET is_deleted = 1, updated_at = ? WHERE uid = ?;
+
+deleteAll:
+DELETE FROM task;

@@ -29,3 +29,6 @@ UPDATE habit SET name = ?, description = ?, color = ?, icon_key = ?, category_ui
 
 softDeleteHabit:
 UPDATE habit SET is_deleted = 1, updated_at = ? WHERE uid = ?;
+
+deleteAll:
+DELETE FROM habit;

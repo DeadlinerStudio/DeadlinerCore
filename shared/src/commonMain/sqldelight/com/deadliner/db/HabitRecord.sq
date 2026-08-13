@@ -24,3 +24,6 @@ WHERE uid = ?;
 
 softDeleteHabitRecord:
 UPDATE habit_record SET is_deleted = 1, updated_at = ? WHERE uid = ?;
+
+deleteAll:
+DELETE FROM habit_record;

@@ -20,3 +20,6 @@ WHERE uid = ?;
 
 softDeleteHabitSchedule:
 UPDATE habit_schedule_item SET is_deleted = 1, updated_at = ? WHERE uid = ?;
+
+deleteAll:
+DELETE FROM habit_schedule_item;

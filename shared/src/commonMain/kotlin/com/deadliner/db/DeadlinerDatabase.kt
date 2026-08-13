@@ -18,6 +18,7 @@ import com.deadliner.sync.transport.SyncBlobTransport
 import com.deadliner.sync.webdav.WebDavTransportConfiguration
 import com.deadliner.platform.NotificationService
 import com.deadliner.service.NotificationOrchestrator
+import com.deadliner.service.BackupService
 
 /** Single lifecycle entry point for the NEW ERA preview database. */
 class DeadlinerDatabase private constructor(
@@ -33,6 +34,7 @@ class DeadlinerDatabase private constructor(
     val captures = CaptureRepository(database, changeLogRepository, mutationNotifier = repositorySync)
     val memory = MemoryRepository(database, changeLogRepository, mutationNotifier = repositorySync)
     val profiles = UserProfileRepository(database, changeLogRepository, mutationNotifier = repositorySync)
+    val backups = BackupService(database)
     val changeLog = changeLogRepository
     val sync = ChangeLogSyncFacade(database, changeLogRepository)
     val webDavChangeLogSync = WebDavChangeLogSyncFacade(sync)
