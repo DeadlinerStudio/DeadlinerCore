@@ -75,13 +75,30 @@ actual class NotificationService(private val context: Context) : NotificationGat
     actual override fun cancelDailySummaryNotification() {
         cancel(DAILY_UID, DAILY_REQUEST_OFFSET, Intent(ACTION_DAILY).setPackage(context.packageName))
     }
-    actual override fun setUpcomingLiveUpdate(config: UpcomingLiveUpdateConfig) = Unit
-    actual override fun cancelUpcomingLiveUpdate(taskUid: String) = Unit
+    actual override fun setUpcomingLiveUpdate(config: UpcomingLiveUpdateConfig) {
+        cancelUpcomingLiveUpdate(config.taskUid)
+        val dueMillis = parseDateTime(config.dueAt)?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli() ?: return
+        val triggerMillis = dueMillis - config.advanceMinutes * 60_000L
+        if (dueMillis <= System.currentTimeMillis()) return
+        val intent = Intent(ACTION_LIVE).setPackage(context.packageName)
+            .putExtra(EXTRA_UID, config.taskUid)
+            .putExtra(EXTRA_TITLE, config.title)
+            .putExtra(EXTRA_DUE_AT, config.dueAt)
+            .putExtra(EXTRA_INTERVAL_SECONDS, config.updateIntervalSeconds)
+        schedule(config.taskUid, LIVE_REQUEST_OFFSET, triggerMillis.coerceAtLeast(System.currentTimeMillis()), intent)
+        remember(LIVE_KEYS, config.taskUid)
+    }
+
+    actual override fun cancelUpcomingLiveUpdate(taskUid: String) {
+        cancel(taskUid, LIVE_REQUEST_OFFSET, Intent(ACTION_LIVE).setPackage(context.packageName).putExtra(EXTRA_UID, taskUid))
+        forget(LIVE_KEYS, taskUid)
+    }
 
     actual override fun cancelAll() {
         cancelAllTaskNotifications()
         cancelAllHabitNotifications()
         cancelDailySummaryNotification()
+        cancelRemembered(LIVE_KEYS, ::cancelUpcomingLiveUpdate)
     }
 
     actual override fun refreshAll(tasks: List<TaskNotificationInfo>, habits: List<HabitNotificationInfo>) {
@@ -137,14 +154,19 @@ actual class NotificationService(private val context: Context) : NotificationGat
         const val ACTION_TASK = "com.deadliner.kmp.notification.TASK"
         const val ACTION_HABIT = "com.deadliner.kmp.notification.HABIT"
         const val ACTION_DAILY = "com.deadliner.kmp.notification.DAILY"
+        const val ACTION_LIVE = "com.deadliner.kmp.notification.LIVE"
         const val EXTRA_UID = "com.deadliner.kmp.notification.UID"
         const val EXTRA_TITLE = "com.deadliner.kmp.notification.TITLE"
+        const val EXTRA_DUE_AT = "com.deadliner.kmp.notification.DUE_AT"
+        const val EXTRA_INTERVAL_SECONDS = "com.deadliner.kmp.notification.INTERVAL_SECONDS"
         private const val PREFERENCES = "kmp_notification_schedule"
         private const val TASK_KEYS = "tasks"
         private const val HABIT_KEYS = "habits"
+        private const val LIVE_KEYS = "live"
         private const val TASK_REQUEST_OFFSET = 210_000
         private const val HABIT_REQUEST_OFFSET = 310_000
         private const val DAILY_REQUEST_OFFSET = 410_000
+        private const val LIVE_REQUEST_OFFSET = 510_000
         private const val DAILY_UID = "daily-summary"
     }
 }
