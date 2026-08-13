@@ -1,7 +1,6 @@
 package com.deadliner.lifi
 
 import com.deadliner.db.repository.MemoryRepository
-import com.deadliner.db.repository.UserProfileRepository
 import com.deadliner.domain.ai.AiHabitProposal
 import com.deadliner.domain.ai.AiMonthlyAnalysis
 import com.deadliner.domain.ai.AiTaskProposal
@@ -96,7 +95,6 @@ class OhosLifiCore private constructor(
             model: String,
             timezone: String,
             memoryRepository: MemoryRepository,
-            profileRepository: UserProfileRepository,
         ): OhosLifiCore {
             val config = AIConfig(
                 apiKey = apiKey,
@@ -105,7 +103,7 @@ class OhosLifiCore private constructor(
                 platform = "ohos",
                 timezone = timezone,
             )
-            val memoryStore = KmpMemoryStoreAdapter(memoryRepository, profileRepository)
+            val memoryStore = KmpMemoryStoreAdapter(memoryRepository)
             val component = LifiAIComponent(config, memoryStore)
             val core = DeadlinerCore(
                 config = config,

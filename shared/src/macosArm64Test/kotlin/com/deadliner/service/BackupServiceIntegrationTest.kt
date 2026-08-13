@@ -21,18 +21,21 @@ class BackupServiceIntegrationTest {
             database.tasks.create(Task("task.backup", "Backup", createdAt = NOW, updatedAt = NOW))
             database.captures.create(CaptureItem("capture.backup", "Idea", CaptureSource.MANUAL, NOW, NOW))
             database.memory.create(MemoryFragment("memory.backup", "Remember this", "preference", NOW, 3, NOW))
+            database.memory.updateUserProfile("Prefers concise plans")
             database.memory.appendConversationTurn("user", "Keep this conversation")
             val backup = database.backups.export()
 
             database.tasks.create(Task("task.after", "After backup", createdAt = LATER, updatedAt = LATER))
             database.tasks.delete("task.backup", LATER)
             database.memory.appendConversationTurn("assistant", "Discard this conversation")
+            database.memory.updateUserProfile("Discard this profile")
             database.backups.restore(backup)
 
             assertEquals("Backup", database.tasks.find("task.backup")?.title)
             assertNull(database.tasks.find("task.after"))
             assertEquals("Idea", database.captures.find("capture.backup")?.text)
             assertEquals("Remember this", database.memory.find("memory.backup")?.content)
+            assertEquals("Prefers concise plans", database.memory.getUserProfile())
             assertEquals("[user] Keep this conversation", database.memory.getRecentConversationContext(10))
         }
     }

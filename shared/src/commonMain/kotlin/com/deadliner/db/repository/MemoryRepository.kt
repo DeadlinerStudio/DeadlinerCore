@@ -23,6 +23,17 @@ class MemoryRepository(
 
     fun update(fragment: MemoryFragment) = save(fragment, ChangeOperation.UPDATE)
 
+    fun getUserProfile(): String =
+        database.memoryUserProfileQueries.selectProfile().executeAsOneOrNull().orEmpty()
+
+    fun updateUserProfile(profile: String) {
+        val normalized = profile.trim()
+        database.transaction {
+            database.memoryUserProfileQueries.upsertProfile(normalized, currentTimestamp())
+        }
+        mutationNotifier.notifyMutation()
+    }
+
     fun delete(uid: String, updatedAt: String) {
         database.transaction {
             database.memoryQueries.softDeleteMemory(updatedAt, uid)
@@ -31,7 +42,7 @@ class MemoryRepository(
         mutationNotifier.notifyMutation()
     }
 
-    fun replaceAll(fragments: List<MemoryFragment>) {
+    fun replaceSnapshot(fragments: List<MemoryFragment>, userProfile: String?) {
         database.transaction {
             val existing = list()
             for (old in existing) {
@@ -47,6 +58,11 @@ class MemoryRepository(
                     fragment.content, fragment.category, fragment.importance.toLong(),
                     fragment.updatedAt, fragment.isDeleted.asLong(), fragment.uid,
                 )
+            }
+            if (userProfile == null) {
+                database.memoryUserProfileQueries.deleteProfile()
+            } else {
+                database.memoryUserProfileQueries.upsertProfile(userProfile.trim(), currentTimestamp())
             }
         }
         mutationNotifier.notifyMutation()

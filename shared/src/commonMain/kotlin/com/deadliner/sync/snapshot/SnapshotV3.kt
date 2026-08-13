@@ -27,6 +27,8 @@ data class SnapshotV3Root(
     val captures: List<SnapshotV3CaptureItem> = emptyList(),
     @SerialName("memory_fragments")
     val memoryFragments: List<SnapshotV3MemoryFragmentItem> = emptyList(),
+    @SerialName("memory_user_profile")
+    val memoryUserProfile: SnapshotV3MemoryUserProfileItem? = null,
     @SerialName("user_profiles")
     val userProfiles: List<SnapshotV3UserProfileItem> = emptyList(),
 ) {
@@ -103,6 +105,12 @@ data class SnapshotV3MemoryFragmentItem(
     val ver: SnapshotV3EntityVersion,
     val deleted: Boolean,
     val doc: MemoryFragment? = null,
+)
+
+@Serializable
+data class SnapshotV3MemoryUserProfileItem(
+    val ver: SnapshotV3EntityVersion,
+    val content: String,
 )
 
 @Serializable

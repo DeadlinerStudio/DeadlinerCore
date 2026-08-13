@@ -32,28 +32,6 @@ class UserProfileRepository(
         mutationNotifier.notifyMutation()
     }
 
-    fun getProfile(): String? {
-        val profiles = list()
-        return profiles.firstOrNull()?.nickname?.ifBlank { null }
-    }
-
-    fun updateProfile(profileText: String) {
-        val existing = list().firstOrNull()
-        val now = currentTimestamp()
-        if (existing != null) {
-            update(existing.copy(nickname = profileText, updatedAt = now))
-        } else {
-            create(
-                com.deadliner.domain.account.UserProfile(
-                    uid = generateUid(),
-                    nickname = profileText,
-                    createdAt = now,
-                    updatedAt = now,
-                )
-            )
-        }
-    }
-
     private fun save(profile: UserProfile, operation: ChangeOperation) {
         database.transaction {
             database.userProfileQueries.insertUserProfile(
@@ -73,10 +51,3 @@ class UserProfileRepository(
         uid: String, nickname: String, avatarFileName: String?, tier: String, createdAt: String, updatedAt: String, isDeleted: Long,
     ) = UserProfile(uid, nickname, avatarFileName, UserTier.valueOf(tier), createdAt, updatedAt, isDeleted.asBoolean())
 }
-
-private fun currentTimestamp(): String =
-    kotlinx.datetime.Clock.System.now().toString()
-
-@OptIn(kotlin.uuid.ExperimentalUuidApi::class)
-private fun generateUid(): String =
-    kotlin.uuid.Uuid.random().toString()

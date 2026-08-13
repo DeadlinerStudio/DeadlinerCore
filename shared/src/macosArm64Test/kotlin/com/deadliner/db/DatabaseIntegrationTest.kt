@@ -36,6 +36,36 @@ import platform.posix.remove
 
 class DatabaseIntegrationTest {
     @Test
+    fun memoryUserProfileSyncDoesNotOverwriteSettingsUser() {
+        val sourcePath = "${NSTemporaryDirectory()}deadliner-memory-profile-source-${NSUUID().UUIDString}.db"
+        val targetPath = "${NSTemporaryDirectory()}deadliner-memory-profile-target-${NSUUID().UUIDString}.db"
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath, "android-test-device"))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath, "ios-test-device"))
+        try {
+            source.memory.updateUserProfile("Prefers concise weekly plans")
+            target.profiles.create(
+                UserProfile(
+                    uid = "settings-user",
+                    nickname = "Aritx",
+                    createdAt = NOW,
+                    updatedAt = NOW,
+                ),
+            )
+
+            val result = target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+
+            assertEquals("Prefers concise weekly plans", target.memory.getUserProfile())
+            assertEquals("Aritx", target.profiles.find("settings-user")?.nickname)
+            assertTrue(SyncResourceKind.MEMORY in result.appliedResources)
+        } finally {
+            source.close()
+            target.close()
+            remove(sourcePath)
+            remove(targetPath)
+        }
+    }
+
+    @Test
     fun captureSnapshotAppliesAcrossDevicesAndReportsCaptureResource() {
         val sourcePath = "${NSTemporaryDirectory()}deadliner-capture-sync-source-${NSUUID().UUIDString}.db"
         val targetPath = "${NSTemporaryDirectory()}deadliner-capture-sync-target-${NSUUID().UUIDString}.db"

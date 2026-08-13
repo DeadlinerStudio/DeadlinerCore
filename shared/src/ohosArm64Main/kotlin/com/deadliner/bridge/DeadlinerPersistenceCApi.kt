@@ -196,7 +196,6 @@ private object PersistenceRuntime {
             model = config.model,
             timezone = config.timezone,
             memoryRepository = activeDatabase.memory,
-            profileRepository = activeDatabase.profiles,
         )
         newCore.start(object : OhosLifiEventListener {
             override fun onEvent(event: CoreEvent) {

@@ -35,54 +35,65 @@ import kotlinx.datetime.Clock
 class SnapshotV3Store(
     private val database: AppDatabase,
 ) {
-    fun export(): SnapshotV3Root = SnapshotV3Root(
-        version = SnapshotV3Version(Clock.System.now().toString(), PlatformIdentity.deviceId()),
-        categories = withStoredTombstones(
-            database.categoryQueries.selectAllIncludingDeleted(::category).executeAsList().map { value ->
-                SnapshotV3CategoryItem(value.uid, versionFor(CATEGORY, value.uid, value.updatedAt), value.isDeleted, value.takeUnless(Category::isDeleted))
-            }, CATEGORY, { it.uid }, { uid, version -> SnapshotV3CategoryItem(uid, version, true) },
-        ),
-        tasks = withStoredTombstones(
-            database.taskQueries.selectAllIncludingDeleted(::task).executeAsList().map { value ->
-                val document = value.copy(subtasks = database.taskSubtaskQueries.selectAllForTask(value.uid, ::subtask).executeAsList().filterNot(TaskSubtask::isDeleted))
-                SnapshotV3TaskItem(value.uid, versionFor(TASK, value.uid, value.updatedAt), value.isDeleted, document.takeUnless(Task::isDeleted))
-            }, TASK, { it.uid }, { uid, version -> SnapshotV3TaskItem(uid, version, true) },
-        ),
-        habits = withStoredTombstones(
-            database.habitQueries.selectAllIncludingDeleted(::habit).executeAsList().map { value ->
-                val allRecords = database.habitRecordQueries.selectAllForHabit(value.uid, ::record).executeAsList()
-                val allScheduleItems = database.habitScheduleQueries.selectAllForHabit(value.uid, ::schedule).executeAsList()
-                val document = value.takeUnless(Habit::isDeleted)?.let { habit ->
-                    SnapshotV3HabitDocument(
-                        habit = habit,
-                        records = allRecords.filterNot(HabitRecord::isDeleted),
-                        scheduleItems = allScheduleItems.filterNot(HabitScheduleItem::isDeleted),
-                    )
-                }
-                val aggregateUpdatedAt = sequenceOf(
-                    sequenceOf(value.updatedAt),
-                    allRecords.asSequence().map(HabitRecord::updatedAt),
-                    allScheduleItems.asSequence().map(HabitScheduleItem::updatedAt),
-                ).flatten().maxOrNull() ?: value.updatedAt
-                SnapshotV3HabitItem(value.uid, versionFor(HABIT, value.uid, aggregateUpdatedAt), value.isDeleted, document)
-            }, HABIT, { it.uid }, { uid, version -> SnapshotV3HabitItem(uid, version, true) },
-        ),
-        captures = withStoredTombstones(
-            database.captureQueries.selectAllIncludingDeleted(::capture).executeAsList().map { value ->
-                SnapshotV3CaptureItem(value.uid, versionFor(CAPTURE, value.uid, value.updatedAt), value.isDeleted, value.takeUnless(CaptureItem::isDeleted))
-            }, CAPTURE, { it.uid }, { uid, version -> SnapshotV3CaptureItem(uid, version, true) },
-        ),
-        memoryFragments = withStoredTombstones(
-            database.memoryQueries.selectAllIncludingDeleted(::memory).executeAsList().map { value ->
-                SnapshotV3MemoryFragmentItem(value.uid, versionFor(MEMORY, value.uid, value.updatedAt), value.isDeleted, value.takeUnless(MemoryFragment::isDeleted))
-            }, MEMORY, { it.uid }, { uid, version -> SnapshotV3MemoryFragmentItem(uid, version, true) },
-        ),
-        userProfiles = withStoredTombstones(
-            database.userProfileQueries.selectAllIncludingDeleted(::profile).executeAsList().map { value ->
-                SnapshotV3UserProfileItem(value.uid, versionFor(PROFILE, value.uid, value.updatedAt), value.isDeleted, value.takeUnless(UserProfile::isDeleted))
-            }, PROFILE, { it.uid }, { uid, version -> SnapshotV3UserProfileItem(uid, version, true) },
-        ),
-    )
+    fun export(): SnapshotV3Root {
+        val memoryUserProfile = database.memoryUserProfileQueries
+            .selectProfileWithUpdatedAt { content, updatedAt -> content to updatedAt }
+            .executeAsOneOrNull()
+        return SnapshotV3Root(
+            version = SnapshotV3Version(Clock.System.now().toString(), PlatformIdentity.deviceId()),
+            categories = withStoredTombstones(
+                database.categoryQueries.selectAllIncludingDeleted(::category).executeAsList().map { value ->
+                    SnapshotV3CategoryItem(value.uid, versionFor(CATEGORY, value.uid, value.updatedAt), value.isDeleted, value.takeUnless(Category::isDeleted))
+                }, CATEGORY, { it.uid }, { uid, version -> SnapshotV3CategoryItem(uid, version, true) },
+            ),
+            tasks = withStoredTombstones(
+                database.taskQueries.selectAllIncludingDeleted(::task).executeAsList().map { value ->
+                    val document = value.copy(subtasks = database.taskSubtaskQueries.selectAllForTask(value.uid, ::subtask).executeAsList().filterNot(TaskSubtask::isDeleted))
+                    SnapshotV3TaskItem(value.uid, versionFor(TASK, value.uid, value.updatedAt), value.isDeleted, document.takeUnless(Task::isDeleted))
+                }, TASK, { it.uid }, { uid, version -> SnapshotV3TaskItem(uid, version, true) },
+            ),
+            habits = withStoredTombstones(
+                database.habitQueries.selectAllIncludingDeleted(::habit).executeAsList().map { value ->
+                    val allRecords = database.habitRecordQueries.selectAllForHabit(value.uid, ::record).executeAsList()
+                    val allScheduleItems = database.habitScheduleQueries.selectAllForHabit(value.uid, ::schedule).executeAsList()
+                    val document = value.takeUnless(Habit::isDeleted)?.let { habit ->
+                        SnapshotV3HabitDocument(
+                            habit = habit,
+                            records = allRecords.filterNot(HabitRecord::isDeleted),
+                            scheduleItems = allScheduleItems.filterNot(HabitScheduleItem::isDeleted),
+                        )
+                    }
+                    val aggregateUpdatedAt = sequenceOf(
+                        sequenceOf(value.updatedAt),
+                        allRecords.asSequence().map(HabitRecord::updatedAt),
+                        allScheduleItems.asSequence().map(HabitScheduleItem::updatedAt),
+                    ).flatten().maxOrNull() ?: value.updatedAt
+                    SnapshotV3HabitItem(value.uid, versionFor(HABIT, value.uid, aggregateUpdatedAt), value.isDeleted, document)
+                }, HABIT, { it.uid }, { uid, version -> SnapshotV3HabitItem(uid, version, true) },
+            ),
+            captures = withStoredTombstones(
+                database.captureQueries.selectAllIncludingDeleted(::capture).executeAsList().map { value ->
+                    SnapshotV3CaptureItem(value.uid, versionFor(CAPTURE, value.uid, value.updatedAt), value.isDeleted, value.takeUnless(CaptureItem::isDeleted))
+                }, CAPTURE, { it.uid }, { uid, version -> SnapshotV3CaptureItem(uid, version, true) },
+            ),
+            memoryFragments = withStoredTombstones(
+                database.memoryQueries.selectAllIncludingDeleted(::memory).executeAsList().map { value ->
+                    SnapshotV3MemoryFragmentItem(value.uid, versionFor(MEMORY, value.uid, value.updatedAt), value.isDeleted, value.takeUnless(MemoryFragment::isDeleted))
+                }, MEMORY, { it.uid }, { uid, version -> SnapshotV3MemoryFragmentItem(uid, version, true) },
+            ),
+            memoryUserProfile = memoryUserProfile?.let { (content, updatedAt) ->
+                SnapshotV3MemoryUserProfileItem(
+                    ver = versionFor(MEMORY_PROFILE, MEMORY_PROFILE_UID, updatedAt),
+                    content = content,
+                )
+            },
+            userProfiles = withStoredTombstones(
+                database.userProfileQueries.selectAllIncludingDeleted(::profile).executeAsList().map { value ->
+                    SnapshotV3UserProfileItem(value.uid, versionFor(PROFILE, value.uid, value.updatedAt), value.isDeleted, value.takeUnless(UserProfile::isDeleted))
+                }, PROFILE, { it.uid }, { uid, version -> SnapshotV3UserProfileItem(uid, version, true) },
+            ),
+        )
+    }
 
     fun merge(remote: SnapshotV3Root?): SnapshotV3MergeResult {
         if (remote == null) return SnapshotV3MergeResult(export(), 0, 0)
@@ -95,6 +106,9 @@ class SnapshotV3Store(
             remote.habits.forEach { item -> applyOrIgnore(HABIT, item.uid, item.ver, { applyHabit(item) }, { applied++; appliedResources += SyncResourceKind.HABIT }, { ignored++ }) }
             remote.captures.forEach { item -> applyOrIgnore(CAPTURE, item.uid, item.ver, { applyCapture(item) }, { applied++; appliedResources += SyncResourceKind.CAPTURE }, { ignored++ }) }
             remote.memoryFragments.forEach { item -> applyOrIgnore(MEMORY, item.uid, item.ver, { applyMemory(item) }, { applied++; appliedResources += SyncResourceKind.MEMORY }, { ignored++ }) }
+            remote.memoryUserProfile?.let { item ->
+                applyOrIgnore(MEMORY_PROFILE, MEMORY_PROFILE_UID, item.ver, { applyMemoryUserProfile(item) }, { applied++; appliedResources += SyncResourceKind.MEMORY }, { ignored++ })
+            }
             remote.userProfiles.forEach { item -> applyOrIgnore(PROFILE, item.uid, item.ver, { applyProfile(item) }, { applied++; appliedResources += SyncResourceKind.PROFILE }, { ignored++ }) }
         }
         return SnapshotV3MergeResult(export(), applied, ignored, appliedResources)
@@ -111,6 +125,7 @@ class SnapshotV3Store(
             database.categoryQueries.deleteAll()
             database.captureQueries.deleteAll()
             database.memoryQueries.deleteAll()
+            database.memoryUserProfileQueries.deleteProfile()
             database.userProfileQueries.deleteAll()
             database.changeLogQueries.deleteAll()
             database.legacyV2VersionQueries.deleteAll()
@@ -120,6 +135,9 @@ class SnapshotV3Store(
             snapshot.habits.forEach { item -> applyOrIgnore(HABIT, item.uid, item.ver, { applyHabit(item) }, {}, {}) }
             snapshot.captures.forEach { item -> applyOrIgnore(CAPTURE, item.uid, item.ver, { applyCapture(item) }, {}, {}) }
             snapshot.memoryFragments.forEach { item -> applyOrIgnore(MEMORY, item.uid, item.ver, { applyMemory(item) }, {}, {}) }
+            snapshot.memoryUserProfile?.let { item ->
+                applyOrIgnore(MEMORY_PROFILE, MEMORY_PROFILE_UID, item.ver, { applyMemoryUserProfile(item) }, {}, {})
+            }
             snapshot.userProfiles.forEach { item -> applyOrIgnore(PROFILE, item.uid, item.ver, { applyProfile(item) }, {}, {}) }
             afterReplace()
         }
@@ -186,6 +204,10 @@ class SnapshotV3Store(
             database.memoryQueries.insertMemory(value.uid, value.content, value.category, value.createdAt, value.importance.toLong(), value.updatedAt, 0)
             database.memoryQueries.updateMemory(value.content, value.category, value.importance.toLong(), value.updatedAt, 0, value.uid)
         }
+    }
+
+    private fun applyMemoryUserProfile(item: SnapshotV3MemoryUserProfileItem) {
+        database.memoryUserProfileQueries.upsertProfile(item.content, item.ver.ts)
     }
 
     private fun applyProfile(item: SnapshotV3UserProfileItem) {
@@ -264,7 +286,7 @@ class SnapshotV3Store(
     private fun String.toTaskState() = when (this) { "active" -> TaskState.ACTIVE; "completed" -> TaskState.COMPLETED; "archived" -> TaskState.ARCHIVED; "abandoned" -> TaskState.ABANDONED; "abandonedArchived" -> TaskState.ABANDONED_ARCHIVED; else -> error("Unknown persisted TaskState: $this") }
 
     private companion object {
-        const val CATEGORY = "category"; const val TASK = "task"; const val HABIT = "habit"; const val CAPTURE = "capture_item"; const val MEMORY = "memory_fragment"; const val PROFILE = "user_profile"
+        const val CATEGORY = "category"; const val TASK = "task"; const val HABIT = "habit"; const val CAPTURE = "capture_item"; const val MEMORY = "memory_fragment"; const val MEMORY_PROFILE = "memory_user_profile"; const val MEMORY_PROFILE_UID = "singleton"; const val PROFILE = "user_profile"
     }
 }
 
