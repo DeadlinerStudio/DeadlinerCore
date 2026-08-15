@@ -191,7 +191,7 @@ deploy_directory() {
     mv "$staged_dir" "$target_dir"
     restore_previous=false
 
-    if ! diff -qr "$source_dir" "$target_dir" >/dev/null; then
+    if ! /usr/bin/diff -r "$source_dir" "$target_dir" >/dev/null; then
       rm -rf "$target_dir"
       [[ ! -e "$backup_dir" ]] || mv "$backup_dir" "$target_dir"
       printf '%s deployment verification failed; the previous artifact was restored.\n' "$label" >&2

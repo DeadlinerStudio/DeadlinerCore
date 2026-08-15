@@ -592,9 +592,9 @@ private object PersistenceRuntime {
     fun diagnosticsJson(): String {
         val activeDatabase = database
         if (activeDatabase == null) {
-            return "{\"bridge_version\":11,\"ready\":false}"
+            return "{\"bridge_version\":12,\"ready\":false}"
         }
-        return "{\"bridge_version\":11,\"ready\":true,\"categories\":" +
+        return "{\"bridge_version\":12,\"ready\":true,\"categories\":" +
             activeDatabase.categories.list().size +
             ",\"tasks\":" + activeDatabase.tasks.list().size +
             ",\"habits\":" + activeDatabase.habits.list().size +
@@ -1014,11 +1014,16 @@ fun deadlinerPersistenceConfigureAutomaticWebDavSync(
     baseUrl: CPointer<ByteVar>?,
     username: CPointer<ByteVar>?,
     password: CPointer<ByteVar>?,
-): Int = PersistenceRuntime.configureAutomaticWebDavSync(
-    baseUrl?.toKString() ?: return 0,
-    username?.toKString() ?: return 0,
-    password?.toKString() ?: return 0,
-)
+): Int {
+    val resolvedBaseUrl = baseUrl?.toKString() ?: return 0
+    val resolvedUsername = username?.toKString() ?: return 0
+    val resolvedPassword = password?.toKString() ?: return 0
+    return PersistenceRuntime.configureAutomaticWebDavSync(
+        resolvedBaseUrl,
+        resolvedUsername,
+        resolvedPassword,
+    )
+}
 
 @CName("deadliner_persistence_task_list_view_model_json")
 fun deadlinerPersistenceTaskListViewModelJson(
