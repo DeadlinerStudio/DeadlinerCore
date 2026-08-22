@@ -44,10 +44,25 @@ class AiUtilityServiceTest {
 
         val habit = service.extractHabits("每天阅读").single()
 
-        assertEquals("DAILY", habit.period.name)
-        assertEquals(1, habit.timesPerPeriod)
-        assertEquals("PER_PERIOD", habit.goalType.name)
-        assertEquals(null, habit.totalTarget)
+        assertEquals("WEEKLY_DAYS", habit.schedule.kind.name)
+        assertEquals(127, habit.schedule.weekdaysMask)
+        assertEquals(1, habit.goal.targetCount)
+        assertEquals("SCHEDULED_DAY", habit.goal.window.name)
+        assertEquals("CHECK_OFF", habit.tracking.mode.name)
+    }
+
+    @Test
+    fun habitExtractionKeepsWeekdayQuantityAndReminderContract() = runBlocking {
+        val service = serviceFor(
+            """{"habits":[{"name":"背单词","schedule":{"kind":"WEEKLY_DAYS","startOn":"2026-08-19","weekdaysMask":31},"goal":{"window":"SCHEDULED_DAY","targetCount":20},"tracking":{"mode":"QUANTITY","unit":"个单词","defaultIncrement":1},"reminder":{"localTime":"08:30","isEnabled":true}}]}""",
+        )
+
+        val habit = service.extractHabits("工作日每天八点半背 20 个单词").single()
+
+        assertEquals(31, habit.schedule.weekdaysMask)
+        assertEquals(20, habit.goal.targetCount)
+        assertEquals("个单词", habit.tracking.unit)
+        assertEquals("08:30", habit.reminder?.localTime)
     }
 
     @Test

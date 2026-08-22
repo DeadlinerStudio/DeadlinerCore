@@ -47,10 +47,12 @@ core.tasks.delete(uid: String, updatedAt: String) // tombstones task and live su
 
 ### Habits
 
-- `Habit(uid, name, description, color, iconKey, categoryUid, period, timesPerPeriod, goalType, totalTarget, status, sortOrder, reminder, createdAt, updatedAt, isDeleted)` is independent from `Task`.
+- `Habit(uid, name, description, color, iconKey, categoryUid, schedule, goal, tracking, status, sortOrder, reminder, createdAt, updatedAt, isDeleted)` is independent from `Task`.
+- `HabitSchedule(kind, startOn, endOn, weekdaysMask, algorithmKey)` supports selected ISO weekdays, one-time plans, and versioned algorithms. `HabitWeekdays` defines the Monday-first bit mask; `EBBINGHAUS_CLASSIC_V1` is the retained classic review plan.
+- `HabitGoal(window, targetCount)` defines scheduled-day, week, month, or lifetime aggregation. `HabitTracking(mode, unit, defaultIncrement)` defines check-off versus quantity input.
 - `HabitRecord(uid, habitUid, occurredOn, count, status, createdAt, updatedAt, isDeleted)` stores check-ins.
-- `HabitScheduleItem(uid, habitUid, dueAt, state, createdAt, updatedAt, isDeleted)` stores generated schedule entries.
-- Enums: `HabitPeriod` (`DAILY`, `WEEKLY`, `MONTHLY`, `ONCE`, `EBBINGHAUS`), `HabitGoalType` (`PER_PERIOD`, `TOTAL`), `HabitStatus`, `HabitRecordStatus`, and `HabitScheduleState`.
+- `HabitScheduleEngine`, `HabitProgressEngine`, and `HabitRecordCommandPolicy` are the cross-platform authority for due state, progress windows, and record mutations.
+- `HabitPeriod` and `HabitGoalType` remain deprecated migration adapters only. Generated schedule rows were removed in schema v5; schedules are derived from the aggregate.
 
 `HabitRepository` methods:
 
@@ -58,13 +60,20 @@ core.tasks.delete(uid: String, updatedAt: String) // tombstones task and live su
 core.habits.list(): List<Habit>
 core.habits.find(uid: String): Habit?
 core.habits.records(habitUid: String): List<HabitRecord>
-core.habits.schedules(habitUid: String): List<HabitScheduleItem>
+core.habits.allRecords(): List<HabitRecord>
 core.habits.create(habit: Habit)
 core.habits.update(habit: Habit)
 core.habits.saveRecord(record: HabitRecord, operation: ChangeOperation = UPDATE)
-core.habits.saveSchedule(item: HabitScheduleItem, operation: ChangeOperation = UPDATE)
+core.habits.toggleRecord(habitUid, occurredOn, occurredAt): HabitActionResult
+core.habits.addRecordAmount(habitUid, occurredOn, amount, occurredAt): HabitActionResult
+core.habits.setRecordAmount(habitUid, occurredOn, amount, occurredAt): HabitActionResult
+core.habits.clearRecords(habitUid, occurredOn, occurredAt): HabitActionResult
 core.habits.delete(uid: String, updatedAt: String)
 ```
+
+`HabitPresentationEngine.statuses` produces the same date-specific due/progress/hint projection used by Habit List and Search. Each `HabitDayStatus` also exposes `canApplyPrimaryAction` and `primaryAction`: check-off habits use `CHECK_OFF`, while quantity habits use `ADD_QUANTITY` with `tracking.defaultIncrement`. Platforms must use this projection for enabled state and invoke the shared ViewModel/repository command instead of deciding future-date or increment behavior themselves. `HabitReminderPlanner.plan` produces concrete local date-times; platform notification code must deliver those instances without recreating recurrence rules.
+
+The AI editor proposal and LiFi `create_habit` contract use nested `schedule`, `goal`, `tracking`, and optional `reminder` objects. The executor accepts legacy `period/timesPerPeriod/goalType/totalTarget` input for one compatibility window and returns `compatibilityWarning` after conversion.
 
 ### Categories and supporting contracts
 

@@ -1,31 +1,41 @@
 selectAll:
-SELECT uid, name, description, color, icon_key, category_uid, period, times_per_period, goal_type,
-       total_target, status, sort_order, reminder_local_time, reminder_enabled, created_at, updated_at, is_deleted
+SELECT uid, name, description, color, icon_key, category_uid, schedule_kind, schedule_start_on,
+       schedule_end_on, schedule_weekdays_mask, schedule_algorithm_key, goal_window, goal_target_count,
+       tracking_mode, tracking_unit, tracking_default_increment, status, sort_order, reminder_local_time,
+       reminder_enabled, created_at, updated_at, is_deleted
 FROM habit
 WHERE is_deleted = 0
 ORDER BY sort_order, created_at;
 
 selectAllIncludingDeleted:
-SELECT uid, name, description, color, icon_key, category_uid, period, times_per_period, goal_type,
-       total_target, status, sort_order, reminder_local_time, reminder_enabled, created_at, updated_at, is_deleted
+SELECT uid, name, description, color, icon_key, category_uid, schedule_kind, schedule_start_on,
+       schedule_end_on, schedule_weekdays_mask, schedule_algorithm_key, goal_window, goal_target_count,
+       tracking_mode, tracking_unit, tracking_default_increment, status, sort_order, reminder_local_time,
+       reminder_enabled, created_at, updated_at, is_deleted
 FROM habit
 ORDER BY sort_order, created_at;
 
 selectByUid:
-SELECT uid, name, description, color, icon_key, category_uid, period, times_per_period, goal_type,
-       total_target, status, sort_order, reminder_local_time, reminder_enabled, created_at, updated_at, is_deleted
+SELECT uid, name, description, color, icon_key, category_uid, schedule_kind, schedule_start_on,
+       schedule_end_on, schedule_weekdays_mask, schedule_algorithm_key, goal_window, goal_target_count,
+       tracking_mode, tracking_unit, tracking_default_increment, status, sort_order, reminder_local_time,
+       reminder_enabled, created_at, updated_at, is_deleted
 FROM habit
 WHERE uid = ?;
 
 insertHabit:
-INSERT OR IGNORE INTO habit (uid, name, description, color, icon_key, category_uid, period, times_per_period, goal_type,
-                   total_target, status, sort_order, reminder_local_time, reminder_enabled, created_at, updated_at, is_deleted)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR IGNORE INTO habit (
+    uid, name, description, color, icon_key, category_uid, schedule_kind, schedule_start_on, schedule_end_on,
+    schedule_weekdays_mask, schedule_algorithm_key, goal_window, goal_target_count, tracking_mode, tracking_unit,
+    tracking_default_increment, status, sort_order, reminder_local_time, reminder_enabled, created_at, updated_at, is_deleted
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateHabit:
-UPDATE habit SET name = ?, description = ?, color = ?, icon_key = ?, category_uid = ?, period = ?,
-    times_per_period = ?, goal_type = ?, total_target = ?, status = ?, sort_order = ?, reminder_local_time = ?,
-    reminder_enabled = ?, updated_at = ?, is_deleted = ? WHERE uid = ?;
+UPDATE habit SET name = ?, description = ?, color = ?, icon_key = ?, category_uid = ?, schedule_kind = ?,
+    schedule_start_on = ?, schedule_end_on = ?, schedule_weekdays_mask = ?, schedule_algorithm_key = ?, goal_window = ?,
+    goal_target_count = ?, tracking_mode = ?, tracking_unit = ?, tracking_default_increment = ?, status = ?, sort_order = ?,
+    reminder_local_time = ?, reminder_enabled = ?, updated_at = ?, is_deleted = ? WHERE uid = ?;
 
 softDeleteHabit:
 UPDATE habit SET is_deleted = 1, updated_at = ? WHERE uid = ?;

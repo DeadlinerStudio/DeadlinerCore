@@ -17,10 +17,16 @@ CREATE TABLE habit (
     color INTEGER,
     icon_key TEXT,
     category_uid TEXT REFERENCES category(uid) ON DELETE SET NULL,
-    period TEXT NOT NULL,
-    times_per_period INTEGER NOT NULL,
-    goal_type TEXT NOT NULL,
-    total_target INTEGER,
+    schedule_kind TEXT NOT NULL,
+    schedule_start_on TEXT NOT NULL,
+    schedule_end_on TEXT,
+    schedule_weekdays_mask INTEGER,
+    schedule_algorithm_key TEXT,
+    goal_window TEXT NOT NULL,
+    goal_target_count INTEGER NOT NULL,
+    tracking_mode TEXT NOT NULL,
+    tracking_unit TEXT,
+    tracking_default_increment INTEGER NOT NULL,
     status TEXT NOT NULL,
     sort_order INTEGER NOT NULL,
     reminder_local_time TEXT,
@@ -68,14 +74,10 @@ CREATE TABLE habit_record (
     is_deleted INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE habit_schedule_item (
-    uid TEXT NOT NULL PRIMARY KEY,
-    habit_uid TEXT NOT NULL REFERENCES habit(uid),
-    due_at TEXT NOT NULL,
-    state TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    is_deleted INTEGER NOT NULL DEFAULT 0
+CREATE TABLE migration_diagnostic (
+    diagnostic_key TEXT NOT NULL PRIMARY KEY,
+    diagnostic_value INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL
 );
 
 CREATE TABLE capture_item (
@@ -142,7 +144,6 @@ CREATE INDEX idx_task_category ON task(category_uid);
 CREATE INDEX idx_subtask_task ON task_subtask(task_uid, sort_order);
 CREATE INDEX idx_habit_category ON habit(is_deleted, category_uid, sort_order);
 CREATE INDEX idx_habit_record_habit ON habit_record(habit_uid, is_deleted, occurred_on);
-CREATE INDEX idx_habit_schedule_habit ON habit_schedule_item(habit_uid, is_deleted, due_at);
 CREATE INDEX idx_capture_consumed ON capture_item(is_deleted, is_consumed, created_at);
 CREATE TABLE conversation_turn (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -6,7 +6,17 @@ import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitPeriod
 import com.deadliner.domain.habit.HabitRecord
 import com.deadliner.domain.habit.HabitGoalType
+import com.deadliner.domain.habit.HabitGoal
+import com.deadliner.domain.habit.HabitSchedule
+import com.deadliner.domain.habit.HabitScheduleKind
+import com.deadliner.domain.habit.HabitTracking
+import com.deadliner.domain.habit.HabitTrackingMode
+import com.deadliner.domain.habit.HabitWeekdays
 import com.deadliner.viewmodel.habit.HabitListViewModel
+import com.deadliner.viewmodel.habit.HabitPrimaryActionKind
+import kotlinx.datetime.Clock
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -69,6 +79,37 @@ class HabitListViewModelIntegrationTest {
             assertEquals(7, viewModel.uiState.value.weekOverview.size)
             viewModel.updateSearchQuery("missing")
             assertTrue(viewModel.uiState.value.visibleHabits.isEmpty())
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun primaryActionAddsDefaultIncrementForQuantityTracking() {
+        val path = "${NSTemporaryDirectory()}deadliner-habit-quantity-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            val today = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date.toString()
+            val now = Clock.System.now().toString()
+            val habit = Habit(
+                uid = "words",
+                name = "Learn words",
+                schedule = HabitSchedule(HabitScheduleKind.WEEKLY_DAYS, today, weekdaysMask = HabitWeekdays.ALL),
+                goal = HabitGoal(targetCount = 20),
+                tracking = HabitTracking(HabitTrackingMode.QUANTITY, unit = "words", defaultIncrement = 5),
+                createdAt = now,
+            )
+            val viewModel = HabitListViewModel(database.habits)
+            viewModel.saveHabitNow(habit)
+
+            viewModel.toggleHabitRecordNow(habit.uid, today, now)
+            val state = viewModel.toggleHabitRecordNow(habit.uid, today, now)
+            val status = state.visibleHabits.single()
+
+            assertEquals(10, status.doneCount)
+            assertEquals(HabitPrimaryActionKind.ADD_QUANTITY, status.primaryAction.kind)
+            assertEquals(5, status.primaryAction.amount)
         } finally {
             database.close()
             remove(path)

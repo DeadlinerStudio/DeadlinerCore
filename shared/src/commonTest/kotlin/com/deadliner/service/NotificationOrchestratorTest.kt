@@ -3,7 +3,11 @@ package com.deadliner.service
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitPeriod
 import com.deadliner.domain.habit.HabitReminder
+import com.deadliner.domain.habit.HabitGoal
+import com.deadliner.domain.habit.HabitSchedule
+import com.deadliner.domain.habit.HabitScheduleKind
 import com.deadliner.domain.habit.HabitStatus
+import com.deadliner.domain.habit.HabitWeekdays
 import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskState
 import com.deadliner.platform.DailySummaryConfig
@@ -13,6 +17,7 @@ import com.deadliner.platform.NotificationGateway
 import com.deadliner.platform.TaskNotificationConfig
 import com.deadliner.platform.TaskNotificationInfo
 import com.deadliner.platform.UpcomingLiveUpdateConfig
+import kotlinx.datetime.LocalDate
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -54,6 +59,49 @@ class NotificationOrchestratorTest {
         assertEquals(listOf("enabled"), gateway.habitSchedules.map { it.habitUid })
         assertTrue(gateway.cancelledTaskUids.contains("task.none"))
         assertEquals(setOf("disabled", "archived"), gateway.cancelledHabitUids.toSet())
+    }
+
+    @Test
+    fun habitReminderOccurrencesComeFromKmpSchedule() {
+        val gateway = RecordingNotificationGateway()
+        val orchestrator = NotificationOrchestrator(
+            gateway,
+            todayProvider = { LocalDate.parse("2026-08-17") },
+        )
+        val habit = Habit(
+            uid = "workdays",
+            name = "Words",
+            schedule = HabitSchedule(
+                HabitScheduleKind.WEEKLY_DAYS,
+                "2026-08-17",
+                weekdaysMask = HabitWeekdays.MONDAY or HabitWeekdays.WEDNESDAY,
+            ),
+            goal = HabitGoal(),
+            reminder = HabitReminder("08:30"),
+            createdAt = NOW,
+        )
+
+        orchestrator.onHabitCreated(habit)
+
+        val config = gateway.habitSchedules.single()
+        assertTrue(config.isScheduleAuthoritative)
+        assertEquals(
+            listOf("2026-08-17T08:30", "2026-08-19T08:30", "2026-08-24T08:30"),
+            config.scheduledLocalDateTimes.take(3),
+        )
+
+        orchestrator.onHabitRecordsChanged(
+            habit,
+            listOf(
+                com.deadliner.domain.habit.HabitRecord(
+                    uid = "done",
+                    habitUid = habit.uid,
+                    occurredOn = "2026-08-17",
+                    createdAt = "2026-08-17T07:00:00Z",
+                ),
+            ),
+        )
+        assertEquals("2026-08-19T08:30", gateway.habitSchedules.last().scheduledLocalDateTimes.first())
     }
 
     private fun task(

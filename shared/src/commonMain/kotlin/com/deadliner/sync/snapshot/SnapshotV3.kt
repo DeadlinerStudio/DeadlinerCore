@@ -5,7 +5,6 @@ import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.category.Category
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitRecord
-import com.deadliner.domain.habit.HabitScheduleItem
 import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.domain.sync.EntityVersion
 import com.deadliner.domain.task.Task
@@ -13,7 +12,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * The portable full-state snapshot format. Version 3 intentionally replaces the three v2 files
+ * The portable full-state snapshot format. Version 4 carries the independent Habit aggregate.
  * with one typed document while retaining a per-entity LWW version and explicit tombstones.
  */
 @Serializable
@@ -33,7 +32,7 @@ data class SnapshotV3Root(
     val userProfiles: List<SnapshotV3UserProfileItem> = emptyList(),
 ) {
     companion object {
-        const val FORMAT_VERSION = 3
+        const val FORMAT_VERSION = 4
     }
 }
 
@@ -74,13 +73,11 @@ data class SnapshotV3TaskItem(
     val doc: Task? = null,
 )
 
-/** Habit records and schedule items are part of their parent habit aggregate in a full snapshot. */
+/** Habit records are part of their parent habit aggregate; due dates are derived from Habit.schedule. */
 @Serializable
 data class SnapshotV3HabitDocument(
     val habit: Habit,
     val records: List<HabitRecord> = emptyList(),
-    @SerialName("schedule_items")
-    val scheduleItems: List<HabitScheduleItem> = emptyList(),
 )
 
 @Serializable

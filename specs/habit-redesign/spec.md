@@ -46,7 +46,7 @@
 
 `HabitSchedule` 只回答某个本地日期是否为计划日：
 
-- `kind`：`WEEKLY_DAYS`、`ONCE`、`EBBINGHAUS`。
+- `kind`：`WEEKLY_DAYS`、`ONCE`、`ALGORITHM`；艾宾浩斯由 `algorithmKey` 选择。
 - `startOn`：明确的本地日期，不再借用 `createdAt` 表示业务起点。
 - `endOn`：可选；为空表示持续有效。
 - `weekdaysMask`：仅 `WEEKLY_DAYS` 使用，ISO 周一到周日的 7 bit 非空掩码。
@@ -154,3 +154,40 @@
 6. **Android 大文件**：不要求先重构 `AddDDLActivity`；它只做最小接线，领域规则必须留在 KMP。
 
 详细用户行为与技术落地分别见 `prd.md` 和 `trd.md`。
+
+## 2026-08-19 实现回填
+
+- KMP 已落地独立的 `schedule / goal / tracking` Habit 合同、纯日期排期引擎、进度引擎和记录命令策略；Habit 仍不含任何 Task UID。
+- SQLDelight schema 已迁移到 v5，旧 `period/times_per_period/goal_type/total_target` 列被替换，`habit_schedule_item` 已删除；丢弃行数记录在 `migration_diagnostic`。
+- Snapshot 根格式与同步外层协议门槛已升到 V4，旧外层协议会明确拒绝，不会静默按新 Habit JSON 合并；类名暂保留 `SnapshotV3*` 以控制本批次的桥接面，后续只做命名清理。
+- `HabitListViewModel` 与 Overview 已改用 `HabitProgressEngine`；日列表新增 daily/period/upcoming review 分区数据。
+- KMP 提醒规划器会生成未来 64 天的具体本地触发时刻；Android core actual 已使用下一条权威实例。iOS/HarmonyOS 原生投递层与独立 App UI 的接线仍属于下一批平台任务。
+- 为 Android `AddDDLActivity` 保留了旧 editor 方法的临时 source-compatible adapter，但其中没有新增排期、进度或提醒算法。
+
+## 2026-08-20 平台接线回填
+
+- Harmony C ABI/NAPI 新增按指定日期拉取 Habit presentation 的只读入口；DTO 同时携带 `visibleHabits`、`weekOverview` 和 shared reminder plans。
+- Harmony 主列表与搜索页已删除本地周期边界、进度聚合和艾宾浩斯曲线，统一消费 KMP 的 due/progress/hint/primary action。
+- Harmony Habit 提醒不再固定发布每日 Alarm；平台只从 shared plan 取最近 20 个具体本地时间并发布单次提醒，旧的每 Habit 单实例会在下一次刷新时对账清理。
+- Harmony 新建与编辑表单已提供每天、工作日、周末和逐日自定义选择；`weekdaysMask` 从 KMP payload 回填并原样保存，修改名称或目标不会再覆盖已有计划。艾宾浩斯模式隐藏周几选择并继续使用 shared algorithm schedule。
+- iOS Home 已消费 typed shared state 和 shared 主操作；排除 App Icon 后 Habit 相关 Swift 文件通过编译，完整工程仍有无关的 `RichMainView` 编译错误。
+
+## 2026-08-21 平台接线回填
+
+- Android Archive 已改为展示 shared `schedule/goal/tracking` 投影；原生搜索改为直接消费 shared `matchedHabitStatuses`，非计划日不可触发主操作。Android `:app:compileDebugKotlin` 与 shared `macosArm64Test` 均通过。
+- iOS Habit 编辑器新增每天、工作日、周末和逐日自定义选择，bit 0 到 bit 6 对应周一到周日，并禁止空计划；提醒文案和保存行为均明确跟随执行日。
+- iOS `KMPHabitPresentationStore` 已停止使用 deprecated Habit 构造器，创建与编辑直接写入 `HabitSchedule/HabitGoal/HabitTracking`；编辑时保留既有 `startOn/endOn`、数量单位与默认增量，艾宾浩斯继续固定映射到 `EBBINGHAUS_CLASSIC_V1`。
+- iOS AI bridge 已将新 proposal 的 `schedule/goal/reminder` 投影到本地编辑 DTO，可保留“工作日”等周几计划。临时排除资源输入后，Habit 相关 Swift 编译无错误；完整 App 仍被本功能范围外的既有 Swift/项目配置错误阻断（最近一次增量构建停在 `KMPTaskPresentationStore`，此前也暴露过 `RichMainView` 与工具链 API 可用性问题）。
+- iOS 新增统一 `HabitSharedPresentationMapper`，Home、Search、Category、Archive 和 Watch 不再自行解释旧 `period` 或计算艾宾浩斯/周期边界；搜索的“今天”过滤与所有主操作均以 shared `isDue/canApplyPrimaryAction` 为准。
+- iOS Widget 的今日分母与完成数改由 `HabitProgressEngine.dayOverview` 生成；Watch 同步列表改由 `HabitPresentationEngine.statuses` 生成，数量追踪的手表主操作会按 shared `defaultIncrement` 增量，不再一律 toggle。
+- iOS `KMPHabitReminderScheduler` 改为消费 `HabitReminderPlanner.plan`，全局按触发时间排序并只保留最近 48 个实例；取消旧实例改为可等待操作，保证“清理完成后再写入”，避免异步回调误删刚重建的通知。
+- iOS 精确残留扫描已不再发现 `HabitPeriodBounds`、本地 `getEbbinghausState`、经典曲线常量或固定每日 due 判断。相关 Swift 文件均进入 Simulator 编译且无错误；完整构建当前只暴露范围外的 `RichMainView.TabRole.prominent` 与 `ThemeModifiers.toolbarMinimizationBehavior` 工具链问题。
+
+## 2026-08-22 验收回填
+
+- Android 创建表单补齐每天、工作日、周末和逐日自定义选择，默认 `weekdaysMask=127`，禁止空计划，并通过 `HabitEditorViewModel.updateWeekdaysMask` 写入 KMP；`AddDDLActivity` 只新增这一处字段接线，没有承载排期算法。
+- Android 与 iOS Habit 卡片现在会向屏幕阅读器播报名称、共享进度/计划、完成状态和当前是否可打卡；HarmonyOS 使用 ArkUI `accessibilityGroup/accessibilityText/accessibilityDescription` 聚合卡片语义，周几按钮会播报完整星期名与选中状态。
+- HarmonyOS 的列表和搜索卡片新增 `progressText/scheduleLabel` 投影，数量单位、每天/工作日/周末/自定义计划以及周期/总目标文案均从 KMP payload 格式化，不再展示旧 `DAILY/TOTAL` 枚举名。
+- 新增 `scripts/verify_habit_v4_migration.sh`：复制 SQLDelight `1.db` 基线并升级为真实 v4 SQLite 样本，执行仓库真实 `4.sqm`，检查五类旧 Habit 映射、历史记录、`foreign_key_check`、废弃 schedule item 诊断计数，以及迁移前备份恢复。
+- 真实样本首次执行发现旧艾宾浩斯 `times_per_period > 1` 会被错误迁成 `QUANTITY`；`4.sqm` 已改为强制 `EBBINGHAUS -> CHECK_OFF`，复跑通过。V2 iOS JSON snapshot 样本也已直接断言新 `schedule/goal/tracking/reminder` 合同。
+- 验证结果：shared `macosArm64Test`、Android `:app:compileDebugKotlin`、HarmonyOS `assembleHap` 均成功；iOS 本批 Habit Swift 文件编译无错误，完整 App 仍仅被本功能范围外的 `ThemeModifiers.toolbarMinimizationBehavior` 工具链兼容问题阻断。

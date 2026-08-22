@@ -31,6 +31,9 @@ class ChangeLogSyncFacade(
             return failure("Invalid V3 sync payload", error)
         }
         try {
+            require(remote.formatVersion == ChangeLogSyncPayload.FORMAT_VERSION) {
+                "Unsupported sync format ${remote.formatVersion}; expected ${ChangeLogSyncPayload.FORMAT_VERSION}"
+            }
             remote.snapshot?.let(SnapshotV3Validator::requireValid)
             val merged = snapshotStore.merge(remote.snapshot)
             return ChangeLogSyncMergeResult(
@@ -63,10 +66,14 @@ class ChangeLogSyncFacade(
  */
 @Serializable
 data class ChangeLogSyncPayload(
-    val formatVersion: Int = 3,
+    val formatVersion: Int = FORMAT_VERSION,
     val snapshot: SnapshotV3Root? = null,
     val changes: List<ChangeLogEntry> = emptyList(),
-)
+) {
+    companion object {
+        const val FORMAT_VERSION = 4
+    }
+}
 
 data class ChangeLogSyncMergeResult(
     val payload: String,

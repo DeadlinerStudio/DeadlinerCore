@@ -46,6 +46,14 @@ class IosHabitListStateBridge(
         viewModel.initialize()
     }
 
+    fun selectDate(rawDate: String) {
+        viewModel.selectDate(rawDate)
+    }
+
+    fun applyPrimaryAction(habitUid: String) {
+        viewModel.toggleHabitOnSelectedDate(habitUid)
+    }
+
     override fun close() {
         callbackScope.cancel()
         workerScope.cancel()

@@ -5,9 +5,17 @@ import com.deadliner.db.repository.HabitRepository
 import com.deadliner.domain.category.Category
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitGoalType
+import com.deadliner.domain.habit.HabitAlgorithms
+import com.deadliner.domain.habit.HabitGoal
+import com.deadliner.domain.habit.HabitGoalWindow
 import com.deadliner.domain.habit.HabitPeriod
 import com.deadliner.domain.habit.HabitReminder
+import com.deadliner.domain.habit.HabitSchedule
+import com.deadliner.domain.habit.HabitScheduleKind
 import com.deadliner.domain.habit.HabitStatus
+import com.deadliner.domain.habit.HabitTracking
+import com.deadliner.domain.habit.HabitTrackingMode
+import com.deadliner.domain.habit.HabitWeekdays
 import com.deadliner.platform.PlatformIdentity
 import com.deadliner.service.NotificationOrchestrator
 import kotlinx.coroutines.CoroutineScope
@@ -19,6 +27,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 
 class HabitEditorViewModel(
     private val habitRepository: HabitRepository,
@@ -38,7 +48,13 @@ class HabitEditorViewModel(
                 _uiState.value = HabitEditorUiState(
                     categories = categoryRepository.list(),
                     editingHabit = habit,
-                    formData = habit?.toFormData() ?: HabitFormData(),
+                    formData = habit?.toFormData() ?: HabitFormData(
+                        schedule = HabitSchedule(
+                            HabitScheduleKind.WEEKLY_DAYS,
+                            Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date.toString(),
+                            weekdaysMask = HabitWeekdays.ALL,
+                        ),
+                    ),
                     isLoading = false,
                 )
             } catch (error: Exception) {
@@ -52,10 +68,56 @@ class HabitEditorViewModel(
     fun updateColor(value: Int?) = updateForm { copy(color = value) }
     fun updateIconKey(value: String?) = updateForm { copy(iconKey = value) }
     fun updateCategory(value: String?) = updateForm { copy(categoryUid = value) }
-    fun updatePeriod(value: HabitPeriod) = updateForm { copy(period = value) }
-    fun updateTimesPerPeriod(value: Int) = updateForm { copy(timesPerPeriod = value.coerceAtLeast(1)) }
-    fun updateGoalType(value: HabitGoalType) = updateForm { copy(goalType = value) }
-    fun updateTotalTarget(value: Int?) = updateForm { copy(totalTarget = value) }
+    fun updateSchedule(value: HabitSchedule) = updateForm { copy(schedule = value) }
+    fun updateGoal(value: HabitGoal) = updateForm { copy(goal = value) }
+    fun updateTracking(value: HabitTracking) = updateForm { copy(tracking = value) }
+    fun updateWeekdaysMask(value: Int) = updateForm {
+        copy(schedule = schedule.copy(kind = HabitScheduleKind.WEEKLY_DAYS, weekdaysMask = value, algorithmKey = null))
+    }
+
+    /** Temporary source-compatible adapter for Android's existing editor wiring. */
+    fun updatePeriod(value: HabitPeriod) = updateForm {
+        when (value) {
+            HabitPeriod.ONCE -> copy(
+                schedule = HabitSchedule(HabitScheduleKind.ONCE, schedule.startOn, schedule.endOn),
+                goal = goal.copy(window = HabitGoalWindow.SCHEDULED_DAY),
+            )
+            HabitPeriod.EBBINGHAUS -> copy(
+                schedule = HabitSchedule(
+                    HabitScheduleKind.ALGORITHM,
+                    schedule.startOn,
+                    schedule.endOn,
+                    algorithmKey = HabitAlgorithms.EBBINGHAUS_CLASSIC_V1,
+                ),
+                goal = HabitGoal(HabitGoalWindow.SCHEDULED_DAY, 1),
+                tracking = HabitTracking(HabitTrackingMode.CHECK_OFF),
+            )
+            else -> copy(
+                schedule = HabitSchedule(
+                    HabitScheduleKind.WEEKLY_DAYS,
+                    schedule.startOn,
+                    schedule.endOn,
+                    weekdaysMask = schedule.weekdaysMask ?: HabitWeekdays.ALL,
+                ),
+                goal = goal.copy(
+                    window = when (value) {
+                        HabitPeriod.WEEKLY -> HabitGoalWindow.WEEK
+                        HabitPeriod.MONTHLY -> HabitGoalWindow.MONTH
+                        else -> HabitGoalWindow.SCHEDULED_DAY
+                    },
+                ),
+            )
+        }
+    }
+    fun updateTimesPerPeriod(value: Int) = updateForm {
+        if (goal.window == HabitGoalWindow.LIFETIME) this else copy(goal = goal.copy(targetCount = value.coerceAtLeast(1)))
+    }
+    fun updateGoalType(value: HabitGoalType) = updateForm {
+        copy(goal = goal.copy(window = if (value == HabitGoalType.TOTAL) HabitGoalWindow.LIFETIME else period.defaultWindow()))
+    }
+    fun updateTotalTarget(value: Int?) = updateForm {
+        if (goal.window == HabitGoalWindow.LIFETIME && value != null) copy(goal = goal.copy(targetCount = value.coerceAtLeast(1))) else this
+    }
     fun updateReminder(value: HabitReminder?) = updateForm { copy(reminder = value) }
 
     fun save() {
@@ -76,10 +138,9 @@ class HabitEditorViewModel(
                     color = form.color,
                     iconKey = form.iconKey,
                     categoryUid = form.categoryUid,
-                    period = form.period,
-                    timesPerPeriod = form.timesPerPeriod,
-                    goalType = form.goalType,
-                    totalTarget = form.totalTarget,
+                    schedule = form.schedule,
+                    goal = form.goal,
+                    tracking = form.tracking,
                     status = existing?.status ?: HabitStatus.ACTIVE,
                     sortOrder = existing?.sortOrder ?: 0,
                     reminder = form.reminder,
@@ -121,14 +182,24 @@ data class HabitFormData(
     val color: Int? = null,
     val iconKey: String? = null,
     val categoryUid: String? = null,
-    val period: HabitPeriod = HabitPeriod.DAILY,
-    val timesPerPeriod: Int = 1,
-    val goalType: HabitGoalType = HabitGoalType.PER_PERIOD,
-    val totalTarget: Int? = null,
+    val schedule: HabitSchedule = HabitSchedule(HabitScheduleKind.WEEKLY_DAYS, "1970-01-01", weekdaysMask = HabitWeekdays.ALL),
+    val goal: HabitGoal = HabitGoal(),
+    val tracking: HabitTracking = HabitTracking(),
     val reminder: HabitReminder? = null,
 ) {
-    fun isValid(): Boolean = name.isNotBlank() && timesPerPeriod > 0 &&
-        (goalType != HabitGoalType.TOTAL || totalTarget == null || totalTarget > 0)
+    val period: HabitPeriod
+        get() = when {
+            schedule.kind == HabitScheduleKind.ONCE -> HabitPeriod.ONCE
+            schedule.algorithmKey == HabitAlgorithms.EBBINGHAUS_CLASSIC_V1 -> HabitPeriod.EBBINGHAUS
+            goal.window == HabitGoalWindow.WEEK -> HabitPeriod.WEEKLY
+            goal.window == HabitGoalWindow.MONTH -> HabitPeriod.MONTHLY
+            else -> HabitPeriod.DAILY
+        }
+    val timesPerPeriod: Int get() = goal.targetCount
+    val goalType: HabitGoalType get() = if (goal.window == HabitGoalWindow.LIFETIME) HabitGoalType.TOTAL else HabitGoalType.PER_PERIOD
+    val totalTarget: Int? get() = goal.targetCount.takeIf { goal.window == HabitGoalWindow.LIFETIME }
+
+    fun isValid(): Boolean = name.isNotBlank() && goal.targetCount > 0
 }
 
 private fun Habit.toFormData() = HabitFormData(
@@ -137,9 +208,14 @@ private fun Habit.toFormData() = HabitFormData(
     color = color,
     iconKey = iconKey,
     categoryUid = categoryUid,
-    period = period,
-    timesPerPeriod = timesPerPeriod,
-    goalType = goalType,
-    totalTarget = totalTarget,
+    schedule = schedule,
+    goal = goal,
+    tracking = tracking,
     reminder = reminder,
 )
+
+private fun HabitPeriod.defaultWindow(): HabitGoalWindow = when (this) {
+    HabitPeriod.WEEKLY -> HabitGoalWindow.WEEK
+    HabitPeriod.MONTHLY -> HabitGoalWindow.MONTH
+    else -> HabitGoalWindow.SCHEDULED_DAY
+}

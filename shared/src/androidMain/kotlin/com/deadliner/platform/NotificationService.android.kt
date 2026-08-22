@@ -35,10 +35,17 @@ actual class NotificationService(private val context: Context) : NotificationGat
 
     actual override fun setHabitNotification(config: HabitNotificationConfig) {
         cancelHabitNotification(config.habitUid)
-        val time = runCatching { LocalTime.parse(config.alarmTime) }.getOrNull() ?: return
         val now = LocalDateTime.now()
-        var trigger = now.toLocalDate().atTime(time)
-        if (!trigger.isAfter(now)) trigger = trigger.plusDays(1)
+        val concreteTrigger = config.scheduledLocalDateTimes.asSequence()
+            .mapNotNull(::parseDateTime)
+            .firstOrNull { it.isAfter(now) }
+        if (config.isScheduleAuthoritative && concreteTrigger == null) return
+        val trigger = concreteTrigger ?: run {
+                val time = runCatching { LocalTime.parse(config.alarmTime) }.getOrNull() ?: return
+                var fallback = now.toLocalDate().atTime(time)
+                if (!fallback.isAfter(now)) fallback = fallback.plusDays(1)
+                fallback
+            }
         val intent = Intent(ACTION_HABIT).setPackage(context.packageName)
             .putExtra(EXTRA_UID, config.habitUid)
             .putExtra(EXTRA_TITLE, config.name)

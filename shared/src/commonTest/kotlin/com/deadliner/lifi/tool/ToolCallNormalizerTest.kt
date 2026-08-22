@@ -76,4 +76,42 @@ class ToolCallNormalizerTest {
         assertEquals("产品评审会", call.name)
         assertEquals("2026-07-25 15:00", call.dueTime)
     }
+
+    @Test
+    fun habitToolWireFormatPreservesWorkdayQuantityPlan() {
+        val parsed = parseLifiMixedResult(
+            """
+            {
+              "toolCalls": [{
+                "tool": "create_habit",
+                "args": {
+                  "name": "背单词",
+                  "schedule": {"kind":"WEEKLY_DAYS","startOn":"2026-08-19","weekdaysMask":31},
+                  "goal": {"window":"SCHEDULED_DAY","targetCount":20},
+                  "tracking": {"mode":"QUANTITY","unit":"个单词","defaultIncrement":1},
+                  "reminder": {"localTime":"08:30","isEnabled":true}
+                },
+                "executionMode": "ASK_USER"
+              }]
+            }
+            """.trimIndent(),
+        )
+
+        val call = assertIs<ToolCall.CreateHabit>(parsed.toolCalls.single())
+        assertEquals(31, call.schedule.weekdaysMask)
+        assertEquals(20, call.goal.targetCount)
+        assertEquals("个单词", call.tracking.unit)
+        assertEquals("08:30", call.reminder?.localTime)
+    }
+
+    @Test
+    fun legacyHabitToolWireFormatIsMarkedForCompatibilityMigration() {
+        val parsed = parseLifiMixedResult(
+            """{"toolCalls":[{"tool":"create_habit","args":{"name":"阅读","period":"WEEKLY","timesPerPeriod":3,"goalType":"PER_PERIOD"}}]}""",
+        )
+
+        val call = assertIs<ToolCall.CreateHabit>(parsed.toolCalls.single())
+        assertEquals("WEEK", call.goal.window.name)
+        assertTrue(call.compatibilityWarning?.contains("Legacy habit fields") == true)
+    }
 }

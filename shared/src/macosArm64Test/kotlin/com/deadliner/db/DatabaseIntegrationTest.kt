@@ -6,6 +6,14 @@ import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.capture.CaptureSource
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitPeriod
+import com.deadliner.domain.habit.HabitActionOutcome
+import com.deadliner.domain.habit.HabitGoal
+import com.deadliner.domain.habit.HabitGoalWindow
+import com.deadliner.domain.habit.HabitSchedule
+import com.deadliner.domain.habit.HabitScheduleKind
+import com.deadliner.domain.habit.HabitTracking
+import com.deadliner.domain.habit.HabitTrackingMode
+import com.deadliner.domain.habit.HabitWeekdays
 import com.deadliner.domain.habit.HabitRecord
 import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.domain.account.UserProfile
@@ -35,6 +43,42 @@ import platform.Foundation.NSTemporaryDirectory
 import platform.posix.remove
 
 class DatabaseIntegrationTest {
+    @Test
+    fun habitV5PersistsWeeklyScheduleAndRejectsOffDayRecording() {
+        val path = "${NSTemporaryDirectory()}deadliner-habit-v5-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "habit-v5-test"))
+        try {
+            val habit = Habit(
+                uid = "habit.workdays",
+                name = "背单词",
+                schedule = HabitSchedule(
+                    HabitScheduleKind.WEEKLY_DAYS,
+                    "2026-08-17",
+                    weekdaysMask = HabitWeekdays.WEEKDAYS,
+                ),
+                goal = HabitGoal(HabitGoalWindow.SCHEDULED_DAY, 20),
+                tracking = HabitTracking(HabitTrackingMode.QUANTITY, "words", 5),
+                createdAt = NOW,
+                updatedAt = NOW,
+            )
+            database.habits.create(habit)
+
+            assertEquals(habit, database.habits.find(habit.uid))
+            assertEquals(
+                HabitActionOutcome.NOT_DUE,
+                database.habits.addRecordAmount(habit.uid, "2026-08-22", 5, NOW).outcome,
+            )
+            assertEquals(
+                HabitActionOutcome.APPLIED,
+                database.habits.addRecordAmount(habit.uid, "2026-08-18", 5, NOW).outcome,
+            )
+            assertEquals(5, database.habits.records(habit.uid).single().count)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
     @Test
     fun memoryUserProfileSyncDoesNotOverwriteSettingsUser() {
         val sourcePath = "${NSTemporaryDirectory()}deadliner-memory-profile-source-${NSUUID().UUIDString}.db"
@@ -222,14 +266,15 @@ class DatabaseIntegrationTest {
     }
 
     @Test
-    fun legacyChangeOnlyPayloadRemainsReadable() {
+    fun legacyChangeOnlyPayloadIsRejectedByV4ProtocolGate() {
         val path = "${NSTemporaryDirectory()}deadliner-legacy-payload-${NSUUID().UUIDString}.db"
         val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
         try {
             val result = database.sync.mergeRemotePayload("""{"formatVersion":1,"changes":[]}""")
 
             assertEquals(0, result.remoteApplied)
-            assertTrue(Json.decodeFromString<ChangeLogSyncPayload>(result.payload).snapshot != null)
+            assertTrue(result.payload.isEmpty())
+            assertTrue(result.failureMessage?.contains("Unsupported sync format 1") == true)
         } finally {
             database.close()
             remove(path)
@@ -243,7 +288,7 @@ class DatabaseIntegrationTest {
         try {
             val preset = Category("category.inbox", "收件箱", "tray", "#2563EB", true, 0, NOW, NOW)
             val payload = ChangeLogSyncPayload(
-                formatVersion = 2,
+                formatVersion = ChangeLogSyncPayload.FORMAT_VERSION,
                 snapshot = SnapshotV3Root(
                     version = SnapshotV3Version(NOW, "ios"),
                     categories = listOf(SnapshotV3CategoryItem(preset.uid, SnapshotV3EntityVersion(NOW, 1, "ios"), false, preset)),

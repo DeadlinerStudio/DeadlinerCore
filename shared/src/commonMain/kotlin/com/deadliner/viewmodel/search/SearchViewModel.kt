@@ -3,7 +3,10 @@ package com.deadliner.viewmodel.search
 import com.deadliner.db.repository.HabitRepository
 import com.deadliner.db.repository.TaskRepository
 import com.deadliner.domain.habit.Habit
+import com.deadliner.domain.habit.HabitRecord
 import com.deadliner.domain.task.Task
+import com.deadliner.viewmodel.habit.HabitDayStatus
+import com.deadliner.viewmodel.habit.HabitPresentationEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -12,6 +15,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.datetime.Clock
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 
 /**
  * 搜索页 ViewModel。
@@ -37,13 +43,16 @@ class SearchViewModel(
             try {
                 val tasks = taskRepository.list()
                 val habits = habitRepository.list()
+                val records = habitRepository.allRecords()
                 _uiState.update {
                     val matches = match(it.query, tasks, habits)
                     it.copy(
                         allTasks = tasks,
                         allHabits = habits,
+                        allHabitRecords = records,
                         matchedTasks = matches.first,
                         matchedHabits = matches.second,
+                        matchedHabitStatuses = project(matches.second, records),
                         isLoading = false,
                         error = null,
                     )
@@ -67,6 +76,7 @@ class SearchViewModel(
                 it.copy(
                     matchedTasks = emptyList(),
                     matchedHabits = emptyList(),
+                    matchedHabitStatuses = emptyList(),
                 )
             }
             return
@@ -82,6 +92,7 @@ class SearchViewModel(
             it.copy(
                 matchedTasks = matchedTasks,
                 matchedHabits = matchedHabits,
+                matchedHabitStatuses = project(matchedHabits, it.allHabitRecords),
             )
         }
     }
@@ -93,6 +104,7 @@ class SearchViewModel(
                 query = "",
                 matchedTasks = emptyList(),
                 matchedHabits = emptyList(),
+                matchedHabitStatuses = emptyList(),
             )
         }
     }
@@ -114,14 +126,21 @@ class SearchViewModel(
         }
         return matchedTasks to matchedHabits
     }
+
+    private fun project(habits: List<Habit>, records: List<HabitRecord>): List<HabitDayStatus> {
+        val today = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date.toString()
+        return HabitPresentationEngine.statuses(habits, records, today)
+    }
 }
 
 // ===== UiState 定义 =====
 data class SearchUiState(
     val allTasks: List<Task> = emptyList(),
     val allHabits: List<Habit> = emptyList(),
+    val allHabitRecords: List<HabitRecord> = emptyList(),
     val matchedTasks: List<Task> = emptyList(),
     val matchedHabits: List<Habit> = emptyList(),
+    val matchedHabitStatuses: List<HabitDayStatus> = emptyList(),
     val query: String = "",
     val isLoading: Boolean = true,
     val error: String? = null,

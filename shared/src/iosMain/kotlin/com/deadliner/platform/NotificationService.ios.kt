@@ -3,10 +3,13 @@
 package com.deadliner.platform
 
 import platform.UserNotifications.UNMutableNotificationContent
+import platform.UserNotifications.UNCalendarNotificationTrigger
 import platform.UserNotifications.UNNotificationRequest
 import platform.UserNotifications.UNTimeIntervalNotificationTrigger
 import platform.UserNotifications.UNUserNotificationCenter
 import kotlinx.datetime.DayOfWeek
+import kotlinx.datetime.LocalDateTime
+import platform.Foundation.NSDateComponents
 
 /**
  * iOS NotificationService actual 实现。
@@ -63,35 +66,55 @@ actual class NotificationService : NotificationGateway {
     // ===== 习惯通知 =====
 
     actual override fun setHabitNotification(config: HabitNotificationConfig) {
-        val content = UNMutableNotificationContent().apply {
-            setTitle("习惯提醒")
-            setBody("该完成 ${config.name} 了")
-            setSound(defaultSound())
-        }
+        notificationCenter.getPendingNotificationRequestsWithCompletionHandler { requests ->
+            val staleIdentifiers = requests
+                ?.filterIsInstance<UNNotificationRequest>()
+                ?.filter { it.identifier.startsWith("HABIT_${config.habitUid}_") || it.identifier == "HABIT_${config.habitUid}" }
+                ?.map { it.identifier }
+                ?: emptyList()
+            notificationCenter.removePendingNotificationRequestsWithIdentifiers(staleIdentifiers)
 
-        // 计算到下一个提醒时间的秒数（简化实现）
-        val intervalSeconds = 24.0 * 60.0 * 60.0 // 每天
-
-        val trigger = UNTimeIntervalNotificationTrigger.triggerWithTimeInterval(
-            timeInterval = intervalSeconds,
-            repeats = true,
-        )
-
-        val request = UNNotificationRequest.requestWithIdentifier(
-            identifier = "HABIT_${config.habitUid}",
-            content = content,
-            trigger = trigger,
-        )
-
-        notificationCenter.addNotificationRequest(request) { error ->
-            error?.let { println("Failed to schedule habit notification: $it") }
+            if (!config.isScheduleAuthoritative) return@getPendingNotificationRequestsWithCompletionHandler
+            config.scheduledLocalDateTimes.forEach { rawDateTime ->
+                val dateTime = runCatching { LocalDateTime.parse(rawDateTime) }.getOrNull()
+                    ?: return@forEach
+                val content = UNMutableNotificationContent().apply {
+                    setTitle("习惯提醒")
+                    setBody("该完成 ${config.name} 了")
+                    setSound(defaultSound())
+                }
+                val components = NSDateComponents().apply {
+                    year = dateTime.year.toLong()
+                    month = dateTime.monthNumber.toLong()
+                    day = dateTime.dayOfMonth.toLong()
+                    hour = dateTime.hour.toLong()
+                    minute = dateTime.minute.toLong()
+                }
+                val trigger = UNCalendarNotificationTrigger.triggerWithDateMatchingComponents(
+                    dateComponents = components,
+                    repeats = false,
+                )
+                val request = UNNotificationRequest.requestWithIdentifier(
+                    identifier = "HABIT_${config.habitUid}_${dateTime.date}",
+                    content = content,
+                    trigger = trigger,
+                )
+                notificationCenter.addNotificationRequest(request) { error ->
+                    error?.let { println("Failed to schedule habit notification: $it") }
+                }
+            }
         }
     }
 
     actual override fun cancelHabitNotification(habitUid: String) {
-        notificationCenter.removePendingNotificationRequestsWithIdentifiers(
-            identifiers = listOf("HABIT_$habitUid"),
-        )
+        notificationCenter.getPendingNotificationRequestsWithCompletionHandler { requests ->
+            val identifiers = requests
+                ?.filterIsInstance<UNNotificationRequest>()
+                ?.filter { it.identifier.startsWith("HABIT_${habitUid}_") || it.identifier == "HABIT_$habitUid" }
+                ?.map { it.identifier }
+                ?: emptyList()
+            notificationCenter.removePendingNotificationRequestsWithIdentifiers(identifiers)
+        }
     }
 
     actual override fun cancelAllHabitNotifications() {

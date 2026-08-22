@@ -3,20 +3,16 @@ package com.deadliner.sync.snapshot
 import com.deadliner.db.AppDatabase
 import com.deadliner.db.repository.asBoolean
 import com.deadliner.db.repository.asLong
+import com.deadliner.db.repository.habitFromSql
+import com.deadliner.db.repository.upsertHabit
 import com.deadliner.domain.account.UserProfile
 import com.deadliner.domain.account.UserTier
 import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.capture.CaptureSource
 import com.deadliner.domain.category.Category
 import com.deadliner.domain.habit.Habit
-import com.deadliner.domain.habit.HabitGoalType
-import com.deadliner.domain.habit.HabitPeriod
 import com.deadliner.domain.habit.HabitRecord
 import com.deadliner.domain.habit.HabitRecordStatus
-import com.deadliner.domain.habit.HabitReminder
-import com.deadliner.domain.habit.HabitScheduleItem
-import com.deadliner.domain.habit.HabitScheduleState
-import com.deadliner.domain.habit.HabitStatus
 import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskState
@@ -53,20 +49,17 @@ class SnapshotV3Store(
                 }, TASK, { it.uid }, { uid, version -> SnapshotV3TaskItem(uid, version, true) },
             ),
             habits = withStoredTombstones(
-                database.habitQueries.selectAllIncludingDeleted(::habit).executeAsList().map { value ->
+                database.habitQueries.selectAllIncludingDeleted(::habitFromSql).executeAsList().map { value ->
                     val allRecords = database.habitRecordQueries.selectAllForHabit(value.uid, ::record).executeAsList()
-                    val allScheduleItems = database.habitScheduleQueries.selectAllForHabit(value.uid, ::schedule).executeAsList()
                     val document = value.takeUnless(Habit::isDeleted)?.let { habit ->
                         SnapshotV3HabitDocument(
                             habit = habit,
                             records = allRecords.filterNot(HabitRecord::isDeleted),
-                            scheduleItems = allScheduleItems.filterNot(HabitScheduleItem::isDeleted),
                         )
                     }
                     val aggregateUpdatedAt = sequenceOf(
                         sequenceOf(value.updatedAt),
                         allRecords.asSequence().map(HabitRecord::updatedAt),
-                        allScheduleItems.asSequence().map(HabitScheduleItem::updatedAt),
                     ).flatten().maxOrNull() ?: value.updatedAt
                     SnapshotV3HabitItem(value.uid, versionFor(HABIT, value.uid, aggregateUpdatedAt), value.isDeleted, document)
                 }, HABIT, { it.uid }, { uid, version -> SnapshotV3HabitItem(uid, version, true) },
@@ -119,7 +112,6 @@ class SnapshotV3Store(
         database.transaction {
             database.taskSubtaskQueries.deleteAll()
             database.habitRecordQueries.deleteAll()
-            database.habitScheduleQueries.deleteAll()
             database.taskQueries.deleteAll()
             database.habitQueries.deleteAll()
             database.categoryQueries.deleteAll()
@@ -175,18 +167,12 @@ class SnapshotV3Store(
         }
         item.doc?.let { document ->
             val value = document.habit
-            database.habitQueries.insertHabit(value.uid, value.name, value.description, value.color?.toLong(), value.iconKey, value.categoryUid, value.period.name, value.timesPerPeriod.toLong(), value.goalType.name, value.totalTarget?.toLong(), value.status.name, value.sortOrder.toLong(), value.reminder?.localTime, value.reminder?.isEnabled?.asLong(), value.createdAt, value.updatedAt, 0)
-            database.habitQueries.updateHabit(value.name, value.description, value.color?.toLong(), value.iconKey, value.categoryUid, value.period.name, value.timesPerPeriod.toLong(), value.goalType.name, value.totalTarget?.toLong(), value.status.name, value.sortOrder.toLong(), value.reminder?.localTime, value.reminder?.isEnabled?.asLong(), value.updatedAt, 0, value.uid)
+            database.upsertHabit(value, deleted = false)
             val incomingRecordUids = document.records.mapTo(mutableSetOf(), HabitRecord::uid)
             database.habitRecordQueries.selectForHabit(value.uid, ::record).executeAsList()
                 .filter { it.uid !in incomingRecordUids }
                 .forEach { database.habitRecordQueries.softDeleteHabitRecord(item.ver.ts, it.uid) }
-            val incomingScheduleUids = document.scheduleItems.mapTo(mutableSetOf(), HabitScheduleItem::uid)
-            database.habitScheduleQueries.selectForHabit(value.uid, ::schedule).executeAsList()
-                .filter { it.uid !in incomingScheduleUids }
-                .forEach { database.habitScheduleQueries.softDeleteHabitSchedule(item.ver.ts, it.uid) }
             document.records.forEach(::saveRecord)
-            document.scheduleItems.forEach(::saveSchedule)
         }
     }
 
@@ -226,11 +212,6 @@ class SnapshotV3Store(
     private fun saveRecord(value: HabitRecord) {
         database.habitRecordQueries.insertHabitRecord(value.uid, value.habitUid, value.occurredOn, value.count.toLong(), value.status.name, value.createdAt, value.updatedAt, value.isDeleted.asLong())
         database.habitRecordQueries.updateHabitRecord(value.habitUid, value.occurredOn, value.count.toLong(), value.status.name, value.updatedAt, value.isDeleted.asLong(), value.uid)
-    }
-
-    private fun saveSchedule(value: HabitScheduleItem) {
-        database.habitScheduleQueries.insertHabitSchedule(value.uid, value.habitUid, value.dueAt, value.state.name, value.createdAt, value.updatedAt, value.isDeleted.asLong())
-        database.habitScheduleQueries.updateHabitSchedule(value.habitUid, value.dueAt, value.state.name, value.updatedAt, value.isDeleted.asLong(), value.uid)
     }
 
     private fun applyOrIgnore(kind: String, uid: String, incoming: SnapshotV3EntityVersion, apply: () -> Unit, accepted: () -> Unit, rejected: () -> Unit) {
@@ -277,9 +258,7 @@ class SnapshotV3Store(
     private fun category(uid: String, name: String, iconKey: String, colorHex: String, isPreset: Long, sortOrder: Long, createdAt: String, updatedAt: String, isDeleted: Long) = Category(uid, name, iconKey, colorHex, isPreset.asBoolean(), sortOrder.toInt(), createdAt, updatedAt, isDeleted.asBoolean())
     private fun task(uid: String, title: String, note: String, startAt: String?, dueAt: String?, state: String, completedAt: String?, categoryUid: String?, isStarred: Long, calendarEventId: Long?, createdAt: String, updatedAt: String, isDeleted: Long) = Task(uid, title, note, startAt, dueAt, state.toTaskState(), completedAt, categoryUid, isStarred.asBoolean(), calendarEventId, createdAt, updatedAt, isDeleted.asBoolean())
     private fun subtask(uid: String, taskUid: String, content: String, isCompleted: Long, sortOrder: Long, createdAt: String, updatedAt: String, isDeleted: Long) = TaskSubtask(uid, taskUid, content, isCompleted.asBoolean(), sortOrder.toInt(), createdAt, updatedAt, isDeleted.asBoolean())
-    private fun habit(uid: String, name: String, description: String?, color: Long?, iconKey: String?, categoryUid: String?, period: String, timesPerPeriod: Long, goalType: String, totalTarget: Long?, status: String, sortOrder: Long, reminderLocalTime: String?, reminderEnabled: Long?, createdAt: String, updatedAt: String, isDeleted: Long) = Habit(uid, name, description, color?.toInt(), iconKey, categoryUid, HabitPeriod.valueOf(period), timesPerPeriod.toInt(), HabitGoalType.valueOf(goalType), totalTarget?.toInt(), HabitStatus.valueOf(status), sortOrder.toInt(), reminderLocalTime?.let { HabitReminder(it, reminderEnabled?.asBoolean() ?: true) }, createdAt, updatedAt, isDeleted.asBoolean())
     private fun record(uid: String, habitUid: String, occurredOn: String, count: Long, status: String, createdAt: String, updatedAt: String, isDeleted: Long) = HabitRecord(uid, habitUid, occurredOn, count.toInt(), HabitRecordStatus.valueOf(status), createdAt, updatedAt, isDeleted.asBoolean())
-    private fun schedule(uid: String, habitUid: String, dueAt: String, state: String, createdAt: String, updatedAt: String, isDeleted: Long) = HabitScheduleItem(uid, habitUid, dueAt, HabitScheduleState.valueOf(state), createdAt, updatedAt, isDeleted.asBoolean())
     private fun capture(uid: String, text: String, source: String, createdAt: String, updatedAt: String, isConsumed: Long, isDeleted: Long) = CaptureItem(uid, text, CaptureSource.valueOf(source), createdAt, updatedAt, isConsumed.asBoolean(), isDeleted.asBoolean())
     private fun memory(uid: String, content: String, category: String, createdAt: String, importance: Long, updatedAt: String, isDeleted: Long) = MemoryFragment(uid, content, category, createdAt, importance.toInt(), updatedAt, isDeleted.asBoolean())
     private fun profile(uid: String, nickname: String, avatarFileName: String?, tier: String, createdAt: String, updatedAt: String, isDeleted: Long) = UserProfile(uid, nickname, avatarFileName, UserTier.valueOf(tier), createdAt, updatedAt, isDeleted.asBoolean())

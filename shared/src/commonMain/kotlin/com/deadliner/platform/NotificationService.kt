@@ -96,6 +96,9 @@ data class HabitNotificationConfig(
     val name: String,
     val alarmTime: String,  // HH:mm 格式
     val daysOfWeek: List<DayOfWeek> = DayOfWeek.entries,
+    /** Concrete local occurrences derived by KMP; platform code must not reimplement recurrence. */
+    val scheduledLocalDateTimes: List<String> = emptyList(),
+    val isScheduleAuthoritative: Boolean = false,
 )
 
 /** 每日统计配置 */

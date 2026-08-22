@@ -11,6 +11,7 @@ import com.deadliner.viewmodel.task.TaskListViewModel
 import com.deadliner.viewmodel.task.TaskListUiState
 import com.deadliner.viewmodel.habit.HabitListViewModel
 import com.deadliner.viewmodel.habit.HabitListUiState
+import com.deadliner.viewmodel.habit.HabitDayStatus
 import com.deadliner.viewmodel.capture.CaptureViewModel
 import com.deadliner.viewmodel.overview.OverviewViewModel
 import com.deadliner.domain.task.Task
@@ -22,7 +23,11 @@ import com.deadliner.domain.category.CategoryMutationRequest
 import com.deadliner.domain.category.HabitCategoryAssignmentRequest
 import com.deadliner.domain.category.CategoryMutationResult
 import com.deadliner.domain.habit.HabitRecord
+import com.deadliner.domain.habit.HabitGoal
+import com.deadliner.domain.habit.HabitReminder
+import com.deadliner.domain.habit.HabitSchedule
 import com.deadliner.domain.habit.HabitStatusAction
+import com.deadliner.domain.habit.HabitTracking
 import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.domain.account.UserProfile
@@ -32,6 +37,7 @@ import com.deadliner.domain.ai.AiTaskProposal
 import com.deadliner.domain.ai.model.CoreEvent
 import com.deadliner.lifi.OhosLifiCore
 import com.deadliner.lifi.OhosLifiEventListener
+import com.deadliner.service.HabitReminderPlanner
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.COpaquePointer
@@ -48,6 +54,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 import kotlinx.datetime.Clock
+import kotlinx.datetime.LocalDate
 
 /**
  * Small C ABI for the HarmonyOS NAPI module.
@@ -467,12 +474,20 @@ private object PersistenceRuntime {
         null
     }
 
-    /** Reads the KMP HabitListViewModel and supplements it with the repository's record state. */
-    fun habitStateJson(): String? = try {
+    /** Reads the KMP HabitListViewModel projection for the requested calendar date. */
+    fun habitStateJson(selectedDate: String? = null): String? = try {
         val activeDatabase = database ?: return null
-        val state = HabitListViewModel(activeDatabase.habits, CoroutineScope(Dispatchers.Default)).loadNow()
+        val viewModel = HabitListViewModel(activeDatabase.habits, CoroutineScope(Dispatchers.Default))
+        val state = viewModel.loadNow().let { initialState ->
+            if (selectedDate == null) {
+                initialState
+            } else {
+                viewModel.selectDate(selectedDate)
+                viewModel.uiState.value
+            }
+        }
         check(state.error == null) { state.error ?: "KMP habit ViewModel failed" }
-        bridgeJson.encodeToString(HabitBridgeState(state.habits, state.records))
+        bridgeJson.encodeToString(state.toHabitBridgeState())
     } catch (_: Throwable) {
         null
     }
@@ -584,7 +599,7 @@ private object PersistenceRuntime {
         val activeDatabase = database ?: return null
         val state = operation(activeDatabase)
         check(state.error == null) { state.error ?: "KMP habit ViewModel intent failed" }
-        bridgeJson.encodeToString(HabitBridgeState(state.habits, state.records))
+        bridgeJson.encodeToString(state.toHabitBridgeState())
     } catch (_: Throwable) {
         null
     }
@@ -683,10 +698,10 @@ private object PersistenceRuntime {
     @Serializable
     private data class LifiHabitPayload(
         val name: String,
-        val period: String,
-        val timesPerPeriod: Int,
-        val goalType: String,
-        val totalTarget: Int? = null,
+        val schedule: HabitSchedule,
+        val goal: HabitGoal,
+        val tracking: HabitTracking,
+        val reminder: HabitReminder? = null,
     )
 
     private fun lifiEventJson(event: CoreEvent): String = bridgeJson.encodeToString(
@@ -724,10 +739,10 @@ private object PersistenceRuntime {
 
     private fun lifiHabitPayload(proposal: AiHabitProposal) = LifiHabitPayload(
         name = proposal.name,
-        period = proposal.period.name,
-        timesPerPeriod = proposal.timesPerPeriod,
-        goalType = proposal.goalType.name,
-        totalTarget = proposal.totalTarget,
+        schedule = proposal.schedule,
+        goal = proposal.goal,
+        tracking = proposal.tracking,
+        reminder = proposal.reminder,
     )
 
     private fun lifiToolName(call: com.deadliner.domain.ai.model.ToolCall): String = when (call) {
@@ -752,7 +767,7 @@ private object PersistenceRuntime {
             LifiReadHabitsArguments(call.keywords),
         )
         is com.deadliner.domain.ai.model.ToolCall.CreateHabit -> bridgeJson.encodeToString(
-            LifiCreateHabitArguments(call.name, call.period, call.timesPerPeriod, call.goalType, call.totalTarget),
+            LifiCreateHabitArguments(call.name, call.schedule, call.goal, call.tracking, call.reminder),
         )
     }
 
@@ -760,7 +775,13 @@ private object PersistenceRuntime {
     @Serializable private data class LifiCreateTaskArguments(val name: String, val dueTime: String?, val note: String?)
     @Serializable private data class LifiUpdateDeadlineArguments(val taskId: String, val newDueTime: String)
     @Serializable private data class LifiReadHabitsArguments(val keywords: List<String>)
-    @Serializable private data class LifiCreateHabitArguments(val name: String, val period: String, val timesPerPeriod: Int, val goalType: String, val totalTarget: Int?)
+    @Serializable private data class LifiCreateHabitArguments(
+        val name: String,
+        val schedule: HabitSchedule,
+        val goal: HabitGoal,
+        val tracking: HabitTracking,
+        val reminder: HabitReminder?,
+    )
 
     @Serializable
     private data class TaskActionRequest(
@@ -772,7 +793,55 @@ private object PersistenceRuntime {
     private data class HabitBridgeState(
         val habits: List<Habit>,
         val records: List<HabitRecord>,
+        val selectedDate: String,
+        val visibleHabits: List<HabitDayStatus>,
+        val upcomingReviews: List<HabitDayStatus>,
+        val weekOverview: List<HabitDayOverviewBridge>,
+        val reminderPlans: List<HabitReminderPlanBridge>,
     )
+
+    @Serializable
+    private data class HabitDayOverviewBridge(
+        val date: String,
+        val completedCount: Int,
+        val totalCount: Int,
+        val completionRatio: Float,
+    )
+
+    @Serializable
+    private data class HabitReminderPlanBridge(
+        val habitUid: String,
+        val scheduledLocalDateTimes: List<String>,
+    )
+
+    private fun HabitListUiState.toHabitBridgeState(): HabitBridgeState {
+        val from = LocalDate.parse(selectedDate)
+        return HabitBridgeState(
+            habits = habits,
+            records = records,
+            selectedDate = selectedDate,
+            visibleHabits = visibleHabits,
+            upcomingReviews = upcomingReviews,
+            weekOverview = weekOverview.map { day ->
+                HabitDayOverviewBridge(
+                    date = day.date,
+                    completedCount = day.completedCount,
+                    totalCount = day.totalCount,
+                    completionRatio = day.completionRatio,
+                )
+            },
+            reminderPlans = habits.map { habit ->
+                HabitReminderPlanBridge(
+                    habitUid = habit.uid,
+                    scheduledLocalDateTimes = HabitReminderPlanner.plan(
+                        habit,
+                        records.filter { it.habitUid == habit.uid },
+                        from,
+                    ),
+                )
+            },
+        )
+    }
 
     @Serializable
     private data class HabitStatusActionRequest(
@@ -1147,6 +1216,16 @@ fun deadlinerPersistenceHabitStateJson(
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
 ): Int = writeCallerOwnedJson(PersistenceRuntime.habitStateJson(), output, outputCapacity)
+
+@CName("deadliner_persistence_habit_state_for_date_json")
+fun deadlinerPersistenceHabitStateForDateJson(
+    selectedDate: CPointer<ByteVar>?,
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int {
+    val date = selectedDate?.toKString() ?: return 0
+    return writeCallerOwnedJson(PersistenceRuntime.habitStateJson(date), output, outputCapacity)
+}
 
 @CName("deadliner_persistence_habit_create_json")
 fun deadlinerPersistenceHabitCreateJson(

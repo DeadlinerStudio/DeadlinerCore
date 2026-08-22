@@ -1,0 +1,5 @@
+selectValue:
+SELECT diagnostic_value FROM migration_diagnostic WHERE diagnostic_key = ?;
+
+selectAll:
+SELECT diagnostic_key, diagnostic_value, recorded_at FROM migration_diagnostic ORDER BY recorded_at DESC;

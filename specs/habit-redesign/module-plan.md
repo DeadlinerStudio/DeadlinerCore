@@ -12,7 +12,7 @@
 
 - `HabitScheduleEngine`：判断计划日、下一次计划日和计划结束。
 - `HabitProgressEngine`：按日/周/月/生命周期窗口聚合记录。
-- `EbbinghausClassicPlan`：唯一维护经典偏移与提示状态。
+- `HabitAlgorithms` + `HabitScheduleEngine`：唯一维护经典偏移与提示状态。
 - `HabitCommandPolicy`：校验未来日期、非计划日、已归档状态及记录命令。
 - 以上模块保持纯 Kotlin、无数据库和平台依赖，以 commonTest 做日期边界测试。
 
@@ -27,6 +27,7 @@
 
 - `HabitEditorViewModel` 负责编辑计划、目标和提醒，不自行计算日期。
 - `HabitListViewModel` 只组合 domain engine 结果，删除重复的 `periodRange/scheduleState` 算法。
+- `HabitPresentationEngine` 形成 List/Search/iOS typed state/Harmony JSON 的统一 due/progress/hint 投影。
 - `HabitReminderPlanner` 从 Habit + Record 生成有界提醒实例。
 - `NotificationOrchestrator` 负责 replace/cancel 生命周期。
 - AI proposal、PromptBuilder、LiFi tool schema 与执行器改用新合同。
@@ -43,11 +44,10 @@
 - `shared/src/commonMain/kotlin/com/deadliner/domain/habit/HabitSchedule.kt`
 - `shared/src/commonMain/kotlin/com/deadliner/domain/habit/HabitGoal.kt`
 - `shared/src/commonMain/kotlin/com/deadliner/domain/habit/HabitRecord.kt`
-- `shared/src/commonMain/kotlin/com/deadliner/domain/habit/HabitReminder.kt`
-- `shared/src/commonMain/kotlin/com/deadliner/domain/habit/HabitScheduleEngine.kt`
-- `shared/src/commonMain/kotlin/com/deadliner/domain/habit/HabitProgressEngine.kt`
-- `shared/src/commonMain/kotlin/com/deadliner/domain/habit/EbbinghausClassicPlan.kt`
-- `shared/src/commonMain/kotlin/com/deadliner/service/HabitReminderPlanner.kt`
+- `shared/src/commonMain/kotlin/com/deadliner/domain/habit/HabitCommands.kt`
+- `shared/src/commonMain/kotlin/com/deadliner/domain/habit/HabitProgress.kt`
+- `shared/src/commonMain/kotlin/com/deadliner/domain/habit/HabitSchedule.kt`
+- `shared/src/commonMain/kotlin/com/deadliner/service/NotificationOrchestrator.kt`（内含当前 planner；平台接线完成后可再独立拆文件）
 - 现有 `HabitRepository.kt`、`HabitEditorViewModel.kt`、`HabitListViewModel.kt` 保留入口，但将规则下沉到上述小文件。
 
 ## 平台映射
@@ -58,15 +58,17 @@
 - Data：更新 `KMPHabitPresentationStore` 映射与 `KMPHabitStore` 新合同。
 - Notification：`KMPHabitReminderScheduler` 改为消费 shared reminder plan；只保留 `UNUserNotificationCenter` 投递。
 - Features：`HabitEditorSheetView`、Home、Search、Category、Archive、Widget/Watch 对齐计划日与提示行为。
+- 当前进度（2026-08-21）：编辑器、Home、Search、Category、Archive、Widget、Watch 与本地提醒均已完成 shared authority 接线；`KMPHabitPresentationStore` 直接映射新合同，平台只保留展示、持久化桥接和系统通知投递。精确扫描已清除 iOS 本地艾宾浩斯、周期边界与固定每日提醒算法。
 
 ### HarmonyOS
 
 - `common/kmp/KmpHabitRepositoryAdapter.ets` 更新 JSON/领域映射。
+- KMP `deadliner_persistence_habit_state_json` 已追加 `selectedDate/visibleHabits/upcomingReviews/weekOverview/reminderPlans`，并提供按日期查询入口；原生适配器按此 DTO 消费，不自行计算。
 - `common/repository/HabitRepository.ets` 只保留平台适配，不再维护独立周期算法。
 - `pages/routes/main/HabitListSection.ets` 删除本地 `getPeriodBounds/getEbbinghausState` 权威，改用 KMP state。
 - `utils/SearchUtils.ets` 删除重复艾宾浩斯逻辑。
 - `utils/notification/ReminderScheduler.ets` 消费 shared reminder plan，不再固定 `[1..7]`。
-- `modify/habit/*` 与 `HabitReminderDialog.ets` 增加周几计划编辑和提醒摘要。
+- `modify/habit/*` 增加周几计划编辑并直接回填/保存 KMP `weekdaysMask`；`HabitReminderDialog.ets` 只编辑本地时间，提醒日期由 shared schedule 派生。
 
 ### Android
 
@@ -77,6 +79,7 @@
 - `notification/AndroidNotificationGateway.kt`、`KmpNotificationReceiver.kt` 与 `BootReceiver.kt` 接收 shared reminder plan；替换当前“单次 Alarm 投递后按每日续期”的隐式循环。
 - `ui/main/simplified/HabitDisplayLayout.kt`、`HabitComponents.kt` 与 `ui/main/shared/MainSearchResultsContent.kt` 继续消费 KMP 派生状态，补充非计划日/周期目标展示。
 - `widgets/HabitMiniWidget.kt`、`HabitMediumWidget.kt` 必须消费相同 due/hint 状态，并在日期、时间和时区变化后刷新。
+- 当前进度（2026-08-22）：编辑器在 `DeadlineEditorComponents.kt` 内提供每天/工作日/周末/自定义周几，`AddDDLActivity` 仅把 mask 交给 shared editor；列表、搜索、归档、Widget、提醒和无障碍状态均消费 shared presentation/command 边界。
 
 ## 持久化与同步
 
@@ -105,6 +108,7 @@
 - Android `DeadlineEditorComponents.kt` 当前约 572 行；周几选择器和目标编辑器分别拆成 feature components，避免跟 Task 编辑继续耦合增长。
 - 日期/进度/艾宾浩斯算法各自保持独立测试文件，避免形成大型“HabitUtils”。
 - 若任何核心文件超过 1000 行有效代码，先拆职责；确需逃逸时再申请批准。
+- `shared/src/ohosArm64Main/.../DeadlinerPersistenceCApi.kt` 是迁移期既有 C ABI 聚合边界，当前 1400 行。产品方于 2026-08-19 批准将其加入本功能白名单，本轮允许保留 Habit DTO/reminder plan 的小范围接线；不得继续向其中加入领域或展示算法，后续按 C ABI 领域拆分治理。
 
 ## 风险点
 

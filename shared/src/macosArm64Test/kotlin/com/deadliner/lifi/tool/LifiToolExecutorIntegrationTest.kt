@@ -44,10 +44,14 @@ class LifiToolExecutorIntegrationTest {
 
             val habitResult = tools.execute(
                 "create_habit",
-                """{"name":"Read","period":"WEEKLY","timesPerPeriod":3,"goalType":"PER_PERIOD"}""",
+                """{"name":"Read","schedule":{"kind":"WEEKLY_DAYS","startOn":"2026-08-19","weekdaysMask":31},"goal":{"window":"SCHEDULED_DAY","targetCount":20},"tracking":{"mode":"QUANTITY","unit":"words","defaultIncrement":1},"reminder":{"localTime":"08:30","isEnabled":true}}""",
             ).objectValue()
             assertTrue(habitResult.boolean("ok"))
-            assertEquals("Read", database.habits.list().single().name)
+            val habit = database.habits.list().single()
+            assertEquals("Read", habit.name)
+            assertEquals(31, habit.schedule.weekdaysMask)
+            assertEquals(20, habit.goal.targetCount)
+            assertEquals("08:30", habit.reminder?.localTime)
 
             assertEquals(1, tools.execute("read_tasks", """{"timeRangeDays":30}""").objectValue()["tasks"]!!.jsonArray.size)
             assertEquals(1, tools.execute("read_habits", "{}").objectValue()["habits"]!!.jsonArray.size)
@@ -59,7 +63,7 @@ class LifiToolExecutorIntegrationTest {
             assertTrue(update.boolean("ok"))
             assertEquals("2026-08-22T09:30", database.tasks.find(taskUid)?.dueAt)
             assertEquals(listOf(taskUid, taskUid), notifications.taskSchedules.map { it.taskUid })
-            assertEquals(database.habits.list().single().uid, notifications.cancelledHabitUids.single())
+            assertEquals(database.habits.list().single().uid, notifications.habitSchedules.single().habitUid)
         }
     }
 
@@ -73,6 +77,8 @@ class LifiToolExecutorIntegrationTest {
             assertFalse(result.boolean("ok"))
             assertTrue(result.boolean("partialSuccess"))
             assertEquals(1, database.habits.list().size)
+            val created = result["createdHabits"]!!.jsonArray.single().jsonObject
+            assertNotNull(created["compatibilityWarning"]?.jsonPrimitive?.content)
         }
     }
 
@@ -94,12 +100,13 @@ class LifiToolExecutorIntegrationTest {
 
 private class RecordingNotificationGateway : NotificationGateway {
     val taskSchedules = mutableListOf<TaskNotificationConfig>()
+    val habitSchedules = mutableListOf<HabitNotificationConfig>()
     val cancelledHabitUids = mutableListOf<String>()
 
     override fun setTaskNotification(config: TaskNotificationConfig) { taskSchedules += config }
     override fun cancelTaskNotification(taskUid: String) = Unit
     override fun cancelAllTaskNotifications() = Unit
-    override fun setHabitNotification(config: HabitNotificationConfig) = Unit
+    override fun setHabitNotification(config: HabitNotificationConfig) { habitSchedules += config }
     override fun cancelHabitNotification(habitUid: String) { cancelledHabitUids += habitUid }
     override fun cancelAllHabitNotifications() = Unit
     override fun setDailySummaryNotification(config: DailySummaryConfig) = Unit

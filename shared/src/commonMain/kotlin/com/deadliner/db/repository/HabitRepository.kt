@@ -2,23 +2,19 @@ package com.deadliner.db.repository
 
 import com.deadliner.db.AppDatabase
 import com.deadliner.domain.habit.Habit
-import com.deadliner.domain.habit.HabitGoalType
-import com.deadliner.domain.habit.HabitPeriod
+import com.deadliner.domain.habit.HabitRecordCommand
+import com.deadliner.domain.habit.HabitRecordCommandPolicy
 import com.deadliner.domain.habit.HabitRecord
 import com.deadliner.domain.habit.HabitRecordStatus
-import com.deadliner.domain.habit.HabitReminder
-import com.deadliner.domain.habit.HabitScheduleItem
-import com.deadliner.domain.habit.HabitScheduleState
 import com.deadliner.domain.habit.HabitStatus
 import com.deadliner.domain.habit.HabitStatusAction
 import com.deadliner.domain.habit.HabitActionOutcome
 import com.deadliner.platform.PlatformIdentity
 import com.deadliner.model.ChangeOperation
 import com.deadliner.sync.RepositoryMutationNotifier
-import kotlinx.datetime.DatePeriod
-import kotlinx.datetime.LocalDate
-import kotlinx.datetime.minus
-import kotlinx.datetime.plus
+import kotlinx.datetime.Clock
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -29,11 +25,13 @@ class HabitRepository(
     private val json: Json = Json,
     private val mutationNotifier: RepositoryMutationNotifier = RepositoryMutationNotifier.NONE,
 ) {
-    fun list(): List<Habit> = database.habitQueries.selectAll(::toHabit).executeAsList()
-    fun find(uid: String): Habit? = database.habitQueries.selectByUid(uid, ::toHabit).executeAsOneOrNull()
+    fun list(): List<Habit> = database.habitQueries.selectAll(::habitFromSql).executeAsList()
+    fun find(uid: String): Habit? = database.habitQueries.selectByUid(uid, ::habitFromSql).executeAsOneOrNull()
     fun records(habitUid: String): List<HabitRecord> = database.habitRecordQueries.selectForHabit(habitUid, ::toRecord).executeAsList()
     fun allRecords(): List<HabitRecord> = database.habitRecordQueries.selectAll(::toRecord).executeAsList()
-    fun schedules(habitUid: String): List<HabitScheduleItem> = database.habitScheduleQueries.selectForHabit(habitUid, ::toSchedule).executeAsList()
+    fun discardedLegacyScheduleItemCount(): Long = database.migrationDiagnosticQueries
+        .selectValue("habit_schedule_item_discarded_v5")
+        .executeAsOneOrNull() ?: 0L
 
     fun create(habit: Habit) = save(habit, ChangeOperation.INSERT)
     fun update(habit: Habit) = save(habit, ChangeOperation.UPDATE)
@@ -51,33 +49,53 @@ class HabitRepository(
     }
 
     fun toggleRecord(habitUid: String, occurredOn: String, occurredAt: String): HabitActionResult {
-        val habit = find(habitUid) ?: return HabitActionResult(null, HabitActionOutcome.NOT_FOUND)
-        val current = records(habitUid)
-        val sameDay = current.filter { it.occurredOn == occurredOn && it.status == HabitRecordStatus.COMPLETED }
-        val remove = when (habit.period) {
-            HabitPeriod.ONCE, HabitPeriod.EBBINGHAUS -> sameDay.isNotEmpty()
-            HabitPeriod.DAILY -> sameDay.sumOf(HabitRecord::count) >= habit.timesPerPeriod.coerceAtLeast(1)
-            HabitPeriod.WEEKLY, HabitPeriod.MONTHLY -> sameDay.isNotEmpty()
-        }
-        database.transaction {
-            if (remove) {
-                sameDay.forEach { softDeleteRecord(it, occurredAt) }
-            } else if (mayAddRecord(habit, current, occurredOn)) {
-                val record = HabitRecord(PlatformIdentity.newId(), habitUid, occurredOn, createdAt = occurredAt, updatedAt = occurredAt)
-                writeRecord(record, ChangeOperation.INSERT)
-            }
-        }
-        mutationNotifier.notifyMutation()
-        return HabitActionResult(find(habitUid), HabitActionOutcome.APPLIED)
+        return executeRecordCommand(HabitRecordCommand.CheckOff(habitUid, occurredOn), occurredAt)
     }
 
     fun clearRecords(habitUid: String, occurredOn: String, occurredAt: String): HabitActionResult {
+        return executeRecordCommand(HabitRecordCommand.Clear(habitUid, occurredOn), occurredAt)
+    }
+
+    fun addRecordAmount(habitUid: String, occurredOn: String, amount: Int, occurredAt: String): HabitActionResult {
+        return executeRecordCommand(HabitRecordCommand.Add(habitUid, occurredOn, amount), occurredAt)
+    }
+
+    fun setRecordAmount(habitUid: String, occurredOn: String, amount: Int, occurredAt: String): HabitActionResult {
+        return executeRecordCommand(HabitRecordCommand.Set(habitUid, occurredOn, amount), occurredAt)
+    }
+
+    fun executeRecordCommand(command: HabitRecordCommand, occurredAt: String): HabitActionResult {
+        val habitUid = command.habitUid
         val habit = find(habitUid) ?: return HabitActionResult(null, HabitActionOutcome.NOT_FOUND)
+        val current = records(habitUid)
+        val decision = HabitRecordCommandPolicy.evaluate(
+            habit,
+            current,
+            command,
+            Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date,
+        )
+        if (decision.outcome != HabitActionOutcome.APPLIED) return HabitActionResult(habit, decision.outcome)
+        val targetCount = decision.targetCountForDay ?: return HabitActionResult(habit, HabitActionOutcome.NO_OP)
         database.transaction {
-            records(habitUid).filter { it.occurredOn == occurredOn }.forEach { softDeleteRecord(it, occurredAt) }
+            current.filter {
+                !it.isDeleted && it.occurredOn == command.occurredOn && it.status == HabitRecordStatus.COMPLETED
+            }.forEach { softDeleteRecord(it, occurredAt) }
+            if (targetCount > 0) {
+                writeRecord(
+                    HabitRecord(
+                        uid = PlatformIdentity.newId(),
+                        habitUid = habitUid,
+                        occurredOn = command.occurredOn,
+                        count = targetCount,
+                        createdAt = occurredAt,
+                        updatedAt = occurredAt,
+                    ),
+                    ChangeOperation.INSERT,
+                )
+            }
         }
         mutationNotifier.notifyMutation()
-        return HabitActionResult(habit, HabitActionOutcome.APPLIED)
+        return HabitActionResult(find(habitUid), decision.outcome)
     }
 
     fun delete(uid: String, updatedAt: String) {
@@ -85,10 +103,6 @@ class HabitRepository(
             database.habitRecordQueries.selectForHabit(uid, ::toRecord).executeAsList().forEach { record ->
                 database.habitRecordQueries.softDeleteHabitRecord(updatedAt, record.uid)
                 changeLog.appendLocal("habit_record", record.uid, ChangeOperation.DELETE, null)
-            }
-            database.habitScheduleQueries.selectForHabit(uid, ::toSchedule).executeAsList().forEach { schedule ->
-                database.habitScheduleQueries.softDeleteHabitSchedule(updatedAt, schedule.uid)
-                changeLog.appendLocal("habit_schedule_item", schedule.uid, ChangeOperation.DELETE, null)
             }
             database.habitQueries.softDeleteHabit(updatedAt, uid)
             changeLog.appendLocal("habit", uid, ChangeOperation.DELETE, null)
@@ -103,34 +117,9 @@ class HabitRepository(
         mutationNotifier.notifyMutation()
     }
 
-    fun saveSchedule(item: HabitScheduleItem, operation: ChangeOperation = ChangeOperation.UPDATE) {
-        database.transaction {
-            database.habitScheduleQueries.insertHabitSchedule(
-                item.uid, item.habitUid, item.dueAt, item.state.name, item.createdAt, item.updatedAt, item.isDeleted.asLong(),
-            )
-            database.habitScheduleQueries.updateHabitSchedule(
-                item.habitUid, item.dueAt, item.state.name, item.updatedAt, item.isDeleted.asLong(), item.uid,
-            )
-            changeLog.appendLocal("habit_schedule_item", item.uid, operation, json.encodeToJsonElement(item).jsonObject)
-        }
-        mutationNotifier.notifyMutation()
-    }
-
     private fun save(habit: Habit, operation: ChangeOperation) {
         database.transaction {
-            database.ensureCategoryReference(habit.categoryUid, habit.updatedAt)
-            database.habitQueries.insertHabit(
-                habit.uid, habit.name, habit.description, habit.color?.toLong(), habit.iconKey, habit.categoryUid,
-                habit.period.name, habit.timesPerPeriod.toLong(), habit.goalType.name, habit.totalTarget?.toLong(),
-                habit.status.name, habit.sortOrder.toLong(), habit.reminder?.localTime,
-                habit.reminder?.isEnabled?.asLong(), habit.createdAt, habit.updatedAt, habit.isDeleted.asLong(),
-            )
-            database.habitQueries.updateHabit(
-                habit.name, habit.description, habit.color?.toLong(), habit.iconKey, habit.categoryUid, habit.period.name,
-                habit.timesPerPeriod.toLong(), habit.goalType.name, habit.totalTarget?.toLong(), habit.status.name,
-                habit.sortOrder.toLong(), habit.reminder?.localTime, habit.reminder?.isEnabled?.asLong(), habit.updatedAt,
-                habit.isDeleted.asLong(), habit.uid,
-            )
+            database.upsertHabit(habit)
             changeLog.appendLocal("habit", habit.uid, operation, json.encodeToJsonElement(habit).jsonObject)
         }
         mutationNotifier.notifyMutation()
@@ -147,49 +136,11 @@ class HabitRepository(
         changeLog.appendLocal("habit_record", record.uid, ChangeOperation.DELETE, null)
     }
 
-    private fun mayAddRecord(habit: Habit, all: List<HabitRecord>, date: String): Boolean {
-        if (habit.goalType == HabitGoalType.TOTAL) return true
-        val target = habit.timesPerPeriod.coerceAtLeast(1)
-        return when (habit.period) {
-            HabitPeriod.DAILY, HabitPeriod.ONCE, HabitPeriod.EBBINGHAUS -> true
-            HabitPeriod.WEEKLY, HabitPeriod.MONTHLY -> all.filter { it.status == HabitRecordStatus.COMPLETED && it.occurredOn in periodRange(habit.period, date) }.sumOf(HabitRecord::count) < target
-        }
-    }
-
-    private fun periodRange(period: HabitPeriod, raw: String): ClosedRange<String> {
-        val date = LocalDate.parse(raw)
-        val start = when (period) {
-            HabitPeriod.WEEKLY -> date.minus(DatePeriod(days = date.dayOfWeek.ordinal))
-            HabitPeriod.MONTHLY -> LocalDate(date.year, date.month, 1)
-            else -> date
-        }
-        val end = when (period) {
-            HabitPeriod.WEEKLY -> start.plus(DatePeriod(days = 6))
-            HabitPeriod.MONTHLY -> start.plus(DatePeriod(months = 1)).minus(DatePeriod(days = 1))
-            else -> start
-        }
-        return start.toString()..end.toString()
-    }
-
-    private fun toHabit(
-        uid: String, name: String, description: String?, color: Long?, iconKey: String?, categoryUid: String?,
-        period: String, timesPerPeriod: Long, goalType: String, totalTarget: Long?, status: String, sortOrder: Long,
-        reminderLocalTime: String?, reminderEnabled: Long?, createdAt: String, updatedAt: String, isDeleted: Long,
-    ) = Habit(
-        uid, name, description, color?.toInt(), iconKey, categoryUid, HabitPeriod.valueOf(period),
-        timesPerPeriod.toInt(), HabitGoalType.valueOf(goalType), totalTarget?.toInt(), HabitStatus.valueOf(status),
-        sortOrder.toInt(), reminderLocalTime?.let { HabitReminder(it, reminderEnabled?.asBoolean() ?: true) },
-        createdAt, updatedAt, isDeleted.asBoolean(),
-    )
-
     private fun toRecord(
         uid: String, habitUid: String, occurredOn: String, count: Long, status: String, createdAt: String,
         updatedAt: String, isDeleted: Long,
     ) = HabitRecord(uid, habitUid, occurredOn, count.toInt(), HabitRecordStatus.valueOf(status), createdAt, updatedAt, isDeleted.asBoolean())
 
-    private fun toSchedule(
-        uid: String, habitUid: String, dueAt: String, state: String, createdAt: String, updatedAt: String, isDeleted: Long,
-    ) = HabitScheduleItem(uid, habitUid, dueAt, HabitScheduleState.valueOf(state), createdAt, updatedAt, isDeleted.asBoolean())
 }
 
 data class HabitActionResult(val habit: Habit?, val outcome: HabitActionOutcome)

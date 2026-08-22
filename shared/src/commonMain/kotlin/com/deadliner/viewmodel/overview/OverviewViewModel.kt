@@ -4,7 +4,7 @@ import com.deadliner.db.repository.HabitRepository
 import com.deadliner.db.repository.TaskRepository
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitRecord
-import com.deadliner.domain.habit.HabitRecordStatus
+import com.deadliner.domain.habit.HabitProgressEngine
 import com.deadliner.domain.habit.HabitStatus
 import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskState
@@ -131,29 +131,22 @@ class OverviewViewModel(
             .take(5)
         val activeHabits = habits.filter { it.status == HabitStatus.ACTIVE }
         val habitProgress = activeHabits.map { habit ->
-            val completed = habitRecords
-                .asSequence()
-                .filter { record ->
-                    record.habitUid == habit.uid &&
-                        record.occurredOn == today.toString() &&
-                        record.status == HabitRecordStatus.COMPLETED
-                }
-                .sumOf(HabitRecord::count)
-            val target = habit.timesPerPeriod.coerceAtLeast(1)
+            val computed = HabitProgressEngine.progress(habit, habitRecords, today)
             HabitProgress(
                 habit = habit,
-                completedToday = completed,
-                targetToday = target,
-                progress = (completed.toFloat() / target).coerceIn(0f, 1f),
+                completedToday = computed.completedCount,
+                targetToday = computed.targetCount,
+                progress = computed.fraction.toFloat(),
             )
         }
+        val habitDayOverview = HabitProgressEngine.dayOverview(activeHabits, habitRecords, today)
         val legacyStats = OverviewStats(
             activeTasks = tasks.count { it.state == TaskState.ACTIVE },
             completedTasks = completed.size,
             archivedTasks = tasks.count(::isArchived),
             totalTasks = tasks.size,
             activeHabits = activeHabits.size,
-            completedHabitsToday = habitProgress.count { it.completedToday >= it.targetToday },
+            completedHabitsToday = habitDayOverview.completedHabitCount,
             habitProgress = habitProgress,
         )
 
