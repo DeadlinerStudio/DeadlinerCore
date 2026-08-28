@@ -10,3 +10,12 @@ actual class PlatformLogger {
         println("[$level] $tag: $message${error?.let { ": ${it.message}" } ?: ""}")
     }
 }
+
+actual object PlatformLogSink {
+    actual fun configure(directory: String, processId: Long?) = Unit
+
+    actual fun write(level: LogLevel, category: String, message: String, errorMessage: String?) {
+        val errorSuffix = errorMessage?.takeIf { it.isNotBlank() }?.let { ": " + it }.orEmpty()
+        println("[" + level.name + "] " + category + ": " + message + errorSuffix)
+    }
+}

@@ -32,6 +32,7 @@ import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.domain.account.UserProfile
 import com.deadliner.platform.PlatformIdentity
+import com.deadliner.platform.PlatformLogSink
 import com.deadliner.domain.ai.AiHabitProposal
 import com.deadliner.domain.ai.AiTaskProposal
 import com.deadliner.domain.ai.model.CoreEvent
@@ -78,6 +79,12 @@ private object PersistenceRuntime {
         lastInitializationError = ""
         require(directory.startsWith('/')) { "database directory must be absolute" }
         require(installationId.isNotBlank()) { "installation ID must not be blank" }
+        PlatformLogSink.configure(directory.substringBeforeLast('/'))
+        PlatformLogSink.write(
+            level = com.deadliner.platform.LogLevel.INFO,
+            category = "persistence",
+            message = "[kmp.runtime.initialize]",
+        )
         closeLifiCore()
         database?.close()
         database = DeadlinerDatabase.create(OhosDatabaseDriverFactory(directory, installationId))
@@ -86,16 +93,32 @@ private object PersistenceRuntime {
         pendingCategoryMutation = null
         pendingStateMutation = null
         pendingLifiUtility = null
+        PlatformLogSink.write(
+            level = com.deadliner.platform.LogLevel.INFO,
+            category = "persistence",
+            message = "[kmp.runtime.initialized]",
+        )
         1
     } catch (error: Throwable) {
         database = null
         lastInitializationError = error.message ?: error.toString()
+        PlatformLogSink.write(
+            level = com.deadliner.platform.LogLevel.ERROR,
+            category = "persistence",
+            message = "[kmp.runtime.initialization-failed]",
+            errorMessage = lastInitializationError,
+        )
         0
     }
 
     fun initializationError(): String = lastInitializationError
 
     fun close(): Int {
+        PlatformLogSink.write(
+            level = com.deadliner.platform.LogLevel.INFO,
+            category = "persistence",
+            message = "[kmp.runtime.close]",
+        )
         closeLifiCore()
         database?.close()
         database = null

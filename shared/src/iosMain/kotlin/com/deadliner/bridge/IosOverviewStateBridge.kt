@@ -3,6 +3,7 @@ package com.deadliner.bridge
 import com.deadliner.db.DeadlinerDatabase
 import com.deadliner.viewmodel.overview.OverviewUiState
 import com.deadliner.viewmodel.overview.OverviewViewModel
+import com.deadliner.platform.PlatformLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -64,5 +65,5 @@ class IosOverviewStateBridge(
 }
 
 private fun overviewBridgeLog(message: String) {
-    println("[KMP][OverviewBridge] $message")
+    PlatformLogger().d("overview-bridge", message)
 }

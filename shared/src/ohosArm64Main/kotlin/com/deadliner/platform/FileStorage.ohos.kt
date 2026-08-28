@@ -8,23 +8,23 @@ package com.deadliner.platform
 actual class FileStorage {
     actual fun save(key: String, data: ByteArray) {
         // 使用 fs API 写入文件
-        println("[HarmonyOS] save: $key")
+        PlatformLogger().i("storage", "[storage.save] key=$key")
     }
 
     actual fun load(key: String): ByteArray? {
         // 使用 fs API 读取文件
-        println("[HarmonyOS] load: $key")
+        PlatformLogger().i("storage", "[storage.load] key=$key")
         return null
     }
 
     actual fun delete(key: String) {
         // 使用 fs API 删除文件
-        println("[HarmonyOS] delete: $key")
+        PlatformLogger().i("storage", "[storage.delete] key=$key")
     }
 
     actual fun exists(key: String): Boolean {
         // 使用 fs API 检查文件是否存在
-        println("[HarmonyOS] exists: $key")
+        PlatformLogger().i("storage", "[storage.exists] key=$key")
         return false
     }
 
@@ -40,12 +40,12 @@ actual class FileStorage {
 
     actual fun clearTemp() {
         // 清理临时目录
-        println("[HarmonyOS] clearTemp")
+        PlatformLogger().i("storage", "[storage.clear-temp]")
     }
 
     actual fun getFileSize(key: String): Long? {
         // 获取文件大小
-        println("[HarmonyOS] getFileSize: $key")
+        PlatformLogger().i("storage", "[storage.size] key=$key")
         return null
     }
 }

@@ -7,6 +7,7 @@ import com.deadliner.domain.habit.HabitRecord
 import com.deadliner.domain.habit.HabitProgressEngine
 import com.deadliner.domain.habit.HabitStatus
 import com.deadliner.domain.task.Task
+import com.deadliner.platform.PlatformLogger
 import com.deadliner.domain.task.TaskState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -383,5 +384,5 @@ private fun Instant.toOverviewCompletionPeriod(timeZone: TimeZone): OverviewComp
 }
 
 private fun overviewLog(message: String) {
-    println("[KMP][Overview] $message")
+    PlatformLogger().d("overview", message)
 }

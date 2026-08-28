@@ -8,35 +8,35 @@ package com.deadliner.platform
 actual class CalendarPort {
     actual suspend fun insertEvent(config: CalendarEventConfig): Long? {
         // 使用 @ohos.calendar 插入事件
-        println("[HarmonyOS] insertEvent: ${config.title}")
+        PlatformLogger().i("calendar", "[calendar.insert] title=${config.title}")
         return null
     }
 
     actual suspend fun updateEvent(eventId: Long, config: CalendarEventConfig) {
         // 使用 @ohos.calendar 更新事件
-        println("[HarmonyOS] updateEvent: $eventId")
+        PlatformLogger().i("calendar", "[calendar.update] id=$eventId")
     }
 
     actual suspend fun deleteEvent(eventId: Long) {
         // 使用 @ohos.calendar 删除事件
-        println("[HarmonyOS] deleteEvent: $eventId")
+        PlatformLogger().i("calendar", "[calendar.delete] id=$eventId")
     }
 
     actual suspend fun hasCalendarPermission(): Boolean {
         // 检查日历权限
-        println("[HarmonyOS] hasCalendarPermission")
+        PlatformLogger().i("calendar", "[calendar.permission.check]")
         return false
     }
 
     actual suspend fun requestCalendarPermission(): Boolean {
         // 请求日历权限
-        println("[HarmonyOS] requestCalendarPermission")
+        PlatformLogger().i("calendar", "[calendar.permission.request]")
         return false
     }
 
     actual suspend fun getCalendarAccounts(): List<CalendarAccount> {
         // 获取日历账户
-        println("[HarmonyOS] getCalendarAccounts")
+        PlatformLogger().i("calendar", "[calendar.accounts.list]")
         return emptyList()
     }
 }
