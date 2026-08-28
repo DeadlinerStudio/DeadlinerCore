@@ -62,6 +62,12 @@ data class PlatformLogRecord(
     val category: String,
     val message: String,
     val context: Map<String, String>? = null,
+    /**
+     * Optional runtime boundary marker. It is omitted for host-native records
+     * to retain the iOS AppLog JSONL shape, while direct KMP file writers use
+     * it so a host retention pass can preserve the text-log source label.
+     */
+    val source: String? = null,
 )
 
 /** Shared serialization and text projection so KMP records match iOS exports. */
@@ -112,6 +118,7 @@ internal object PlatformLogFormat {
             category = category,
             message = message,
             context = context,
+            source = "KMP",
         )
     }
 

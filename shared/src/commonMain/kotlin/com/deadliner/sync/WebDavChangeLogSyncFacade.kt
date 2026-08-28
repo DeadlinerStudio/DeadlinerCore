@@ -98,7 +98,13 @@ class WebDavChangeLogSyncFacade(
 
     private fun merge(remote: SyncBlob?): ChangeLogSyncMergeResult {
         val result = changeLogSync.mergeRemotePayload(remote?.bytes?.decodeToString())
-        result.failureMessage?.let { throw IllegalArgumentException(it) }
+        result.failureMessage?.let { failureMessage ->
+            // The remote payload can contain user data. Keep the detailed
+            // reason in the outcome, but make the durable diagnostic event
+            // safe to export.
+            logger.e("sync.webdav", "sync.remote.merge.failed reason=invalidPayload")
+            throw IllegalArgumentException(failureMessage)
+        }
         return result
     }
 
