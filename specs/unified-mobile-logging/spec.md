@@ -32,6 +32,7 @@
 - HarmonyOS 编译成功；除 HarmonyOS 日志封装外，主源码没有 `console.log/info/warn/error` 或 `hilog/HiLog`。
 - 两个平台均在应用私有 `filesDir/Diagnostics` 下生成上述两个文件；一条 JSONL 记录能生成与 iOS 格式一致的文本行。
 - KMP 关键调用由平台桥接以 `KMP` 来源写入同一对文件。
+- 每次应用启动均记录 `app.environment`：设备型号、厂商、系统名称/版本/API 与应用版本；不记录设备唯一标识符。
 
 ## 风险与约束
 
