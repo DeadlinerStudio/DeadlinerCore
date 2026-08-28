@@ -1,5 +1,6 @@
 package com.deadliner.sync
 
+import com.deadliner.platform.PlatformLogger
 import com.deadliner.sync.transport.SyncBlob
 import com.deadliner.sync.transport.SyncBlobTransport
 import com.deadliner.sync.transport.SyncTransportPreconditionFailedException
@@ -7,6 +8,7 @@ import com.deadliner.sync.transport.SyncWriteCondition
 import com.deadliner.sync.webdav.WebDavSyncTransport
 import com.deadliner.sync.webdav.WebDavTransportConfiguration
 import kotlinx.datetime.Clock
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.serialization.Serializable
 
 /**
@@ -18,6 +20,8 @@ import kotlinx.serialization.Serializable
 class WebDavChangeLogSyncFacade(
     private val changeLogSync: ChangeLogSyncFacade,
 ) {
+    private val logger = PlatformLogger()
+
     /**
      * iOS-facing boundary for a network operation.
      *
@@ -29,36 +33,54 @@ class WebDavChangeLogSyncFacade(
      */
     suspend fun synchronizeSafely(
         configuration: WebDavTransportConfiguration,
-    ): WebDavChangeLogSyncOutcome = synchronizeSafely {
-        synchronize(configuration)
+    ): WebDavChangeLogSyncOutcome = singleFlight {
+        synchronizeSafelyInternal {
+            synchronizeInternal(configuration)
+        }
     }
 
     /** Same protected boundary for native transports such as iCloud. */
     suspend fun synchronizeSafely(
         transport: SyncBlobTransport,
-    ): WebDavChangeLogSyncOutcome = synchronizeSafely {
-        synchronize(transport)
+    ): WebDavChangeLogSyncOutcome = singleFlight {
+        synchronizeSafelyInternal {
+            synchronizeInternal(transport)
+        }
     }
 
     @Throws(Exception::class)
-    suspend fun synchronize(configuration: WebDavTransportConfiguration): WebDavChangeLogSyncResult {
+    suspend fun synchronize(configuration: WebDavTransportConfiguration): WebDavChangeLogSyncResult = singleFlight {
+        synchronizeInternal(configuration)
+    }
+
+    private suspend fun synchronizeInternal(
+        configuration: WebDavTransportConfiguration,
+    ): WebDavChangeLogSyncResult {
         val transport = WebDavSyncTransport(configuration)
         return try {
-            synchronize(transport)
+            synchronizeInternal(transport)
         } finally {
             transport.close()
         }
     }
 
     @Throws(Exception::class)
-    suspend fun synchronize(transport: SyncBlobTransport): WebDavChangeLogSyncResult {
+    suspend fun synchronize(transport: SyncBlobTransport): WebDavChangeLogSyncResult = singleFlight {
+        synchronizeInternal(transport)
+    }
+
+    private suspend fun synchronizeInternal(transport: SyncBlobTransport): WebDavChangeLogSyncResult {
+        logger.i("sync.webdav", "sync.started")
         var remote = transport.read(PAYLOAD_PATH)
+        logger.d("sync.webdav", "sync.remote.read present=" + (remote != null))
         var merge = merge(remote)
 
         try {
             write(transport, merge, remote)
         } catch (_: SyncTransportPreconditionFailedException) {
+            logger.w("sync.webdav", "sync.write.preconditionFailed retry=1")
             remote = transport.read(PAYLOAD_PATH)
+            logger.d("sync.webdav", "sync.remote.reread present=" + (remote != null))
             merge = merge(remote)
             write(transport, merge, remote)
         }
@@ -90,13 +112,19 @@ class WebDavChangeLogSyncFacade(
         }
         val condition = remote?.version?.let(SyncWriteCondition::MatchVersion)
             ?: if (remote == null) SyncWriteCondition.CreateOnly else SyncWriteCondition.Unconditional
+        val conditionName = if (remote?.version != null) "matchVersion" else if (remote == null) "createOnly" else "unconditional"
+        logger.d("sync.webdav", "sync.write condition=" + conditionName)
         transport.write(PAYLOAD_PATH, merge.payload.encodeToByteArray(), condition)
     }
 
-    private suspend fun synchronizeSafely(
+    private suspend fun synchronizeSafelyInternal(
         operation: suspend () -> WebDavChangeLogSyncResult,
     ): WebDavChangeLogSyncOutcome = try {
         operation().let {
+            logger.i(
+                "sync.webdav",
+                "sync.succeeded remoteApplied=" + it.remoteApplied + " remoteIgnored=" + it.remoteIgnored,
+            )
             WebDavChangeLogSyncOutcome(
                 succeeded = true,
                 remoteApplied = it.remoteApplied,
@@ -105,13 +133,28 @@ class WebDavChangeLogSyncFacade(
             )
         }
     } catch (error: Throwable) {
+        val failureType = error::class.simpleName ?: "UnknownSyncFailure"
+        logger.e("sync.webdav", "sync.failed type=" + failureType)
         WebDavChangeLogSyncOutcome(
             succeeded = false,
             failureMessage = error.message ?: error::class.simpleName ?: "Unknown sync transport failure",
         )
     }
 
+    private suspend fun <T> singleFlight(operation: suspend () -> T): T {
+        if (!syncMutex.tryLock()) {
+            logger.i("sync.webdav", "sync.serialized waitingForExistingRun=true")
+            syncMutex.lock()
+        }
+        return try {
+            operation()
+        } finally {
+            syncMutex.unlock()
+        }
+    }
+
     private companion object {
+        val syncMutex = Mutex()
         const val ROOT_COLLECTION = "Deadliner"
         const val PAYLOAD_PATH = "$ROOT_COLLECTION/kmp-changelog-v1.json"
     }

@@ -1,5 +1,28 @@
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 import org.gradle.api.tasks.Copy
+import java.time.Instant
+
+val kmpBuildMetadataDirectory = layout.buildDirectory.dir("generated/kmp-build-metadata/commonMain")
+val generateKmpBuildMetadata by tasks.registering {
+    outputs.dir(kmpBuildMetadataDirectory)
+    outputs.upToDateWhen { false }
+    doLast {
+        val output = kmpBuildMetadataDirectory.get().file("com/deadliner/platform/KmpBuildMetadata.kt").asFile
+        output.parentFile.mkdirs()
+        output.writeText(
+            "package com.deadliner.platform\n\n" +
+                "object KmpBuildMetadata {\n" +
+                "    const val compiledAtUtc: String = \"" + Instant.now().toString() + "\"\n" +
+                "}\n",
+        )
+    }
+}
+
+tasks.configureEach {
+    if (name.startsWith("compile") && name.contains("Kotlin")) {
+        dependsOn(generateKmpBuildMetadata)
+    }
+}
 
 plugins {
     alias(libs.plugins.androidLibrary)
@@ -64,6 +87,9 @@ kotlin {
         }
     }
     sourceSets {
+        named("commonMain") {
+            kotlin.srcDir(kmpBuildMetadataDirectory)
+        }
         commonMain.dependencies {
             implementation(libs.sqldelight.runtime)
             implementation(libs.sqldelight.coroutines)

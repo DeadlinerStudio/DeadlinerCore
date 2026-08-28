@@ -32,6 +32,7 @@ import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.domain.account.UserProfile
 import com.deadliner.platform.PlatformIdentity
+import com.deadliner.platform.KmpBuildMetadata
 import com.deadliner.platform.PlatformLogSink
 import com.deadliner.domain.ai.AiHabitProposal
 import com.deadliner.domain.ai.AiTaskProposal
@@ -80,6 +81,11 @@ private object PersistenceRuntime {
         require(directory.startsWith('/')) { "database directory must be absolute" }
         require(installationId.isNotBlank()) { "installation ID must not be blank" }
         PlatformLogSink.configure(directory.substringBeforeLast('/'))
+        PlatformLogSink.write(
+            level = com.deadliner.platform.LogLevel.INFO,
+            category = "kmp.build",
+            message = "compiledAtUtc=" + KmpBuildMetadata.compiledAtUtc,
+        )
         PlatformLogSink.write(
             level = com.deadliner.platform.LogLevel.INFO,
             category = "persistence",
