@@ -24,22 +24,22 @@
 
 - [x] 新增与 Server 对齐的序列化 DTO 和 fixture 测试。
 - [x] 新增可注入 transport 与 Ktor Bearer HTTP transport。
-- [ ] 新增游标、实体 server version、outbox 的 SQLDelight schema。
-- [ ] 实现分页 pull、Snapshot merge、push、conflict 保留与 follow-up pull。
+- [x] 新增 provider/account 作用域游标、实体 server version、durable outbox 的 SQLDelight schema。
+- [x] 实现分页 pull、Snapshot merge、push、conflict 保留与 follow-up pull。
 - [ ] 将 Repository 写路径与 durable outbox 在同一 SQL transaction 内连接。
 
 ### 完整持久化覆盖
 
-- [ ] 验证 Category、Task/Subtask、Habit/Record、Capture、Memory、MemoryProfile、UserProfile 全覆盖。
+- [x] 验证 Category、Task/Subtask、Habit/Record、Capture、Memory、MemoryProfile、UserProfile 全覆盖。
 - [ ] 为 `conversation_turn` 设计稳定 UID/updated_at/tombstone migration 并升级 snapshot。
-- [ ] 明确 diagnostics/changelog/provider state 等本机元数据不上传。
+- [x] 明确 diagnostics/changelog/provider state 等本机元数据不上传。
 
 ## 阶段 4：验证与回写
 
-- [ ] 运行 Server `go test ./...` 和 race-sensitive 并发测试。
-- [ ] 运行 Core 目标测试与统一 KMP 编译批次。
-- [ ] 校验规格和核心文件行数。
-- [ ] 回写实际接口、验证证据、遗留范围和部署参数。
+- [x] 运行 Server `go test ./...`、`go vet ./...` 和有界写并发测试。
+- [x] 运行 Core 目标测试与统一 KMP 编译批次。
+- [x] 校验规格和核心文件行数。
+- [x] 回写实际接口、验证证据、遗留范围和部署参数。
 
 ## 首批交付切片
 
@@ -48,6 +48,9 @@
 ## 当前验证证据（2026-08-30）
 
 - Core `ServerSyncProtocolTest`、`ServerSnapshotMapperTest` 和 Task/Subtask 聚合删除集成测试通过；完整 `:shared:macosArm64Test` 通过，Ktor transport 完成公共源码编译。
+- Core BYOS engine 集成测试覆盖 outbox 跨进程重放、严格分页、双设备独立任务收敛、并发 conflict 重基线重试，以及七类 Snapshot 业务聚合完整往返。
+- Core Android debug、iOS Simulator ARM64、macOS ARM64、HarmonyOS ARM64 编译通过；新增生产文件最大 337 行、集成测试文件 408 行。
 - Server `go test ./...` 与 `go vet ./...` 通过；OpenAPI YAML 可解析并包含两个 V2 路由和通用 DTO schema。
-- Server domain/app 单测覆盖未知 kind、游标不越过未拉取事件、Core JSON fixture、token device mismatch、payload/batch/page 配置边界。
+- Server syncv2 app/domain/repo 目标 `go test -race` 通过。
+- Server domain/app/repo 单测覆盖未知 kind、游标不越过未拉取事件、Core JSON fixture、token device mismatch、租户作用域转发、payload/batch/page 配置边界、并发容量快速失败与 conflict receipt 重放。
 - MySQL 真实事务故障注入和并发竞争测试尚未补齐，因此“store/domain/HTTP 并发与租户隔离测试”仍保持未完成。

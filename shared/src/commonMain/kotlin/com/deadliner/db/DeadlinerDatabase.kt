@@ -16,6 +16,9 @@ import com.deadliner.sync.WebDavChangeLogSyncOutcome
 import com.deadliner.sync.WebDavV2SyncFacade
 import com.deadliner.sync.transport.SyncBlobTransport
 import com.deadliner.sync.webdav.WebDavTransportConfiguration
+import com.deadliner.sync.server.engine.DeadlinerServerSyncConfiguration
+import com.deadliner.sync.server.engine.DeadlinerServerSyncEngine
+import com.deadliner.sync.server.transport.DeadlinerServerTransport
 import com.deadliner.platform.NotificationService
 import com.deadliner.service.NotificationOrchestrator
 import com.deadliner.service.BackupService
@@ -44,6 +47,12 @@ class DeadlinerDatabase private constructor(
 
     fun createNotificationOrchestrator(notificationService: NotificationService): NotificationOrchestrator =
         NotificationOrchestrator(notificationService)
+
+    /** Creates one offline-first BYOS engine for a stable server/account scope. */
+    fun createDeadlinerServerSyncEngine(
+        configuration: DeadlinerServerSyncConfiguration,
+        transport: DeadlinerServerTransport,
+    ): DeadlinerServerSyncEngine = DeadlinerServerSyncEngine(database, transport, configuration)
 
     /** Installs process-local WebDAV auto-sync. Credentials remain owned by the platform. */
     fun configureAutomaticWebDavSync(

@@ -94,7 +94,10 @@ class SnapshotV3Store(
         )
     }
 
-    fun merge(remote: SnapshotV3Root?): SnapshotV3MergeResult {
+    fun merge(
+        remote: SnapshotV3Root?,
+        afterMerge: () -> Unit = {},
+    ): SnapshotV3MergeResult {
         if (remote == null) return SnapshotV3MergeResult(export(), 0, 0)
         var applied = 0
         var ignored = 0
@@ -109,6 +112,7 @@ class SnapshotV3Store(
                 applyOrIgnore(MEMORY_PROFILE, MEMORY_PROFILE_UID, item.ver, { applyMemoryUserProfile(item) }, { applied++; appliedResources += SyncResourceKind.MEMORY }, { ignored++ })
             }
             remote.userProfiles.forEach { item -> applyOrIgnore(PROFILE, item.uid, item.ver, { applyProfile(item) }, { applied++; appliedResources += SyncResourceKind.PROFILE }, { ignored++ }) }
+            afterMerge()
         }
         return SnapshotV3MergeResult(export(), applied, ignored, appliedResources)
     }
@@ -127,6 +131,9 @@ class SnapshotV3Store(
             database.userProfileQueries.deleteAll()
             database.changeLogQueries.deleteAll()
             database.legacyV2VersionQueries.deleteAll()
+            database.serverSyncStateQueries.deleteAllOutbox()
+            database.serverSyncStateQueries.deleteAllEntityStates()
+            database.serverSyncStateQueries.deleteAllScopes()
 
             snapshot.categories.forEach { item -> applyOrIgnore(CATEGORY, item.uid, item.ver, { applyCategory(item) }, {}, {}) }
             snapshot.tasks.forEach { item -> applyOrIgnore(TASK, item.uid, item.ver, { applyTask(item) }, {}, {}) }
