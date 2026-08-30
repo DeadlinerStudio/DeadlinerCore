@@ -30,10 +30,16 @@ import com.deadliner.sync.snapshot.SnapshotV3CategoryItem
 import com.deadliner.sync.snapshot.SnapshotV3Root
 import com.deadliner.sync.snapshot.SnapshotV3TaskItem
 import com.deadliner.sync.snapshot.SnapshotV3Version
+import com.deadliner.sync.transport.SyncBlob
+import com.deadliner.sync.transport.SyncBlobTransport
+import com.deadliner.sync.transport.SyncWriteCondition
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -282,11 +288,146 @@ class DatabaseIntegrationTest {
     }
 
     @Test
+    fun legacyV3EnvelopeWithoutSnapshotIsUpgradedSafely() {
+        val path = "${NSTemporaryDirectory()}deadliner-v3-empty-snapshot-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "android-test-device"))
+        try {
+            val result = database.sync.mergeRemotePayload("""{"formatVersion":3,"changes":[]}""")
+
+            assertNull(result.failureMessage)
+            val emitted = Json.decodeFromString<ChangeLogSyncPayload>(result.payload)
+            assertEquals(ChangeLogSyncPayload.FORMAT_VERSION, emitted.formatVersion)
+            assertNotNull(emitted.snapshot)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun legacyV3HabitSnapshotMigratesBeforeMerge() {
+        val path = "${NSTemporaryDirectory()}deadliner-legacy-v3-habit-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "android-test-device"))
+        try {
+            val payload = """
+                {
+                  "snapshot": {
+                    "version": {"ts":"2026-08-28T06:00:00Z","dev":"legacy-device"},
+                    "habits": [{
+                      "uid": "habit.legacy.ebbinghaus",
+                      "ver": {"ts":"2026-08-28T06:00:00Z","ctr":2,"dev":"legacy-device"},
+                      "deleted": false,
+                      "doc": {
+                        "habit": {
+                          "uid": "habit.legacy.ebbinghaus",
+                          "name": "Legacy review",
+                          "period": "EBBINGHAUS",
+                          "timesPerPeriod": 9,
+                          "goalType": "PER_PERIOD",
+                          "status": "ACTIVE",
+                          "createdAt": "2026-08-20T09:30:00Z",
+                          "updatedAt": "2026-08-28T06:00:00Z"
+                        },
+                        "records": [],
+                        "schedule_items": []
+                      }
+                    }]
+                  }
+                }
+            """.trimIndent()
+
+            val result = database.sync.mergeRemotePayload(payload)
+
+            assertNull(result.failureMessage)
+            assertEquals(1, result.remoteApplied)
+            val migrated = assertNotNull(database.habits.find("habit.legacy.ebbinghaus"))
+            assertEquals(HabitScheduleKind.ALGORITHM, migrated.schedule.kind)
+            assertEquals("2026-08-20", migrated.schedule.startOn)
+            assertEquals(1, migrated.goal.targetCount)
+            assertEquals(HabitTrackingMode.CHECK_OFF, migrated.tracking.mode)
+            val emitted = Json.decodeFromString<ChangeLogSyncPayload>(result.payload)
+            assertEquals(ChangeLogSyncPayload.FORMAT_VERSION, emitted.formatVersion)
+            assertEquals(SnapshotV3Root.FORMAT_VERSION, emitted.snapshot?.formatVersion)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun versionlessCurrentSnapshotPreservesOhosHabitRecordDefaults() {
+        val path = "${NSTemporaryDirectory()}deadliner-versionless-v4-habit-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "android-test-device"))
+        try {
+            val payload = """
+                {
+                  "snapshot": {
+                    "version": {"ts":"2026-08-30T02:08:14.730Z","dev":"ohos-device"},
+                    "habits": [{
+                      "uid": "habit.current",
+                      "ver": {"ts":"2026-08-30T02:08:14.730Z","ctr":0,"dev":"ohos-device"},
+                      "deleted": false,
+                      "doc": {
+                        "habit": {
+                          "uid": "habit.current",
+                          "name": "Current habit",
+                          "schedule": {"kind":"WEEKLY_DAYS","startOn":"2026-08-01","weekdaysMask":127},
+                          "goal": {"window":"SCHEDULED_DAY","targetCount":1},
+                          "status": "ACTIVE",
+                          "createdAt": "2026-08-01T00:00:00Z"
+                        },
+                        "records": [{
+                          "uid": "ohos-record",
+                          "habitUid": "habit.current",
+                          "occurredOn": "2026-08-30",
+                          "createdAt": "2026-08-30T02:08:14.730Z"
+                        }]
+                      }
+                    }]
+                  }
+                }
+            """.trimIndent()
+
+            val result = database.sync.mergeRemotePayload(payload)
+
+            assertNull(result.failureMessage)
+            val record = database.habits.records("habit.current").single()
+            assertEquals("ohos-record", record.uid)
+            assertEquals(1, record.count)
+            assertEquals("2026-08-30T02:08:14.730Z", record.updatedAt)
+            assertFalse(record.isDeleted)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun safeWebDavSyncDoesNotConvertCancellationIntoFailure() {
+        val path = "${NSTemporaryDirectory()}deadliner-sync-cancellation-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "android-test-device"))
+        try {
+            val cancelledTransport = object : SyncBlobTransport {
+                override suspend fun read(path: String): SyncBlob? = throw CancellationException("superseded")
+                override suspend fun write(path: String, bytes: ByteArray, condition: SyncWriteCondition) = Unit
+                override suspend fun ensureCollection(path: String): Boolean = true
+            }
+
+            assertFailsWith<CancellationException> {
+                runBlocking { database.webDavChangeLogSync.synchronizeSafely(cancelledTransport) }
+            }
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
     fun fullSnapshotKeepsPresetCategoryAndIgnoresHybridChanges() {
         val path = "${NSTemporaryDirectory()}deadliner-category-snapshot-${NSUUID().UUIDString}.db"
         val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
         try {
-            val preset = Category("category.inbox", "收件箱", "tray", "#2563EB", true, 0, NOW, NOW)
+            val preset = Category("category.inbox", "收件箱", "inbox_tray", "#2563EB", true, 0, NOW, NOW)
             val payload = ChangeLogSyncPayload(
                 formatVersion = ChangeLogSyncPayload.FORMAT_VERSION,
                 snapshot = SnapshotV3Root(

@@ -3,9 +3,11 @@ package com.deadliner.sync
 import com.deadliner.db.AppDatabase
 import com.deadliner.db.repository.ChangeLogRepository
 import com.deadliner.model.ChangeLogEntry
+import com.deadliner.platform.PlatformLogger
 import com.deadliner.sync.snapshot.SnapshotV3Root
 import com.deadliner.sync.snapshot.SnapshotV3Store
 import com.deadliner.sync.snapshot.SnapshotV3Validator
+import com.deadliner.sync.snapshot.v3.LegacySnapshotV3Migrator
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -13,7 +15,7 @@ import kotlinx.serialization.json.Json
 /**
  * Compatibility façade retained for the existing WebDAV and native bridges.
  *
- * V3 synchronization is snapshot-only. The local changelog remains available as an audit trail
+ * Snapshot synchronization is snapshot-only. The local changelog remains available as an audit trail
  * for repository writes, but it never participates in network merge or acknowledgement.
  */
 class ChangeLogSyncFacade(
@@ -22,13 +24,15 @@ class ChangeLogSyncFacade(
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
     private val snapshotStore = SnapshotV3Store(database)
+    private val logger = PlatformLogger()
 
     fun mergeRemotePayload(remotePayload: String?): ChangeLogSyncMergeResult {
         val remote = try {
-            remotePayload?.takeIf(String::isNotBlank)?.let { json.decodeFromString<ChangeLogSyncPayload>(it) }
+            remotePayload?.takeIf(String::isNotBlank)?.let(::decodePayload)
                 ?: ChangeLogSyncPayload()
         } catch (error: Exception) {
-            return failure("Invalid V3 sync payload", error)
+            logger.e("sync.webdav", "sync.payload.decode.failed diagnostic=${safePayloadDiagnostic(error)}")
+            return failure("Invalid sync payload", error)
         }
         try {
             require(remote.formatVersion == ChangeLogSyncPayload.FORMAT_VERSION) {
@@ -44,7 +48,60 @@ class ChangeLogSyncFacade(
                 appliedResources = merged.appliedResources,
             )
         } catch (error: Throwable) {
-            return failure("Failed to merge V3 snapshot", error)
+            logger.e("sync.webdav", "sync.payload.merge.failed diagnostic=${safePayloadDiagnostic(error)}")
+            return failure("Failed to merge sync snapshot", error)
+        }
+    }
+
+    private fun decodePayload(raw: String): ChangeLogSyncPayload {
+        val currentFailure = runCatching {
+            json.decodeFromString<ChangeLogSyncPayload>(raw).also(::requireCurrentFormat)
+        }
+        currentFailure.getOrNull()?.let { return it }
+
+        return runCatching {
+            val migrated = requireNotNull(LegacySnapshotV3Migrator.migrate(raw, json)) {
+                "Payload is neither current V4 nor a supported legacy V3 snapshot"
+            }
+            json.decodeFromString<ChangeLogSyncPayload>(migrated).also(::requireCurrentFormat)
+        }.getOrElse { migrationFailure ->
+            throw IllegalArgumentException(
+                "${currentFailure.exceptionOrNull()?.message ?: "Current V4 decode failed"}; " +
+                    "legacy migration failed: ${migrationFailure.message ?: migrationFailure::class.simpleName}",
+                migrationFailure,
+            )
+        }
+    }
+
+    private fun requireCurrentFormat(payload: ChangeLogSyncPayload) {
+        require(payload.formatVersion == ChangeLogSyncPayload.FORMAT_VERSION) {
+            "Unsupported sync format ${payload.formatVersion}; expected ${ChangeLogSyncPayload.FORMAT_VERSION}"
+        }
+        payload.snapshot?.let { snapshot ->
+            require(snapshot.formatVersion == SnapshotV3Root.FORMAT_VERSION) {
+                "Unsupported snapshot format ${snapshot.formatVersion}; expected ${SnapshotV3Root.FORMAT_VERSION}"
+            }
+        }
+    }
+
+    private fun safePayloadDiagnostic(error: Throwable): String {
+        val messages = generateSequence(error) { it.cause }
+            .mapNotNull(Throwable::message)
+            .joinToString(" ")
+        val missingFields = REQUIRED_FIELD_PATTERN.findAll(messages)
+            .map { it.groupValues[1] }
+            .distinct()
+            .take(4)
+            .toList()
+        return when {
+            missingFields.isNotEmpty() -> "missingFields=${missingFields.joinToString(",")}"
+            "Unsupported sync format" in messages -> "unsupportedSyncFormat"
+            "Unsupported snapshot format" in messages -> "unsupportedSnapshotFormat"
+            "Unsupported legacy habit period" in messages -> "unsupportedLegacyHabitPeriod"
+            "Unsupported legacy habit goal type" in messages -> "unsupportedLegacyHabitGoalType"
+            "Invalid v4 snapshot" in messages -> "snapshotValidation"
+            "Unexpected JSON token" in messages -> "malformedJson"
+            else -> "type=${error::class.simpleName ?: "UnknownPayloadFailure"}"
         }
     }
 
@@ -74,6 +131,8 @@ data class ChangeLogSyncPayload(
         const val FORMAT_VERSION = 4
     }
 }
+
+private val REQUIRED_FIELD_PATTERN = Regex("Field '([A-Za-z0-9_]+)' is required")
 
 data class ChangeLogSyncMergeResult(
     val payload: String,

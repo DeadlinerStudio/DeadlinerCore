@@ -31,7 +31,7 @@ object HabitPresentationEngine {
                 doneCount = progress.completedCount,
                 targetCount = progress.targetCount,
                 isCompleted = progress.isComplete,
-                canApplyPrimaryAction = due.isDue && !progress.isComplete && habit.status == HabitStatus.ACTIVE && date <= today,
+                canApplyPrimaryAction = due.isDue && habit.status == HabitStatus.ACTIVE && date <= today,
                 primaryAction = HabitPrimaryAction(
                     kind = if (habit.tracking.mode == HabitTrackingMode.QUANTITY) {
                         HabitPrimaryActionKind.ADD_QUANTITY

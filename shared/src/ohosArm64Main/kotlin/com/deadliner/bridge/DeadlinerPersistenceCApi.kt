@@ -32,7 +32,7 @@ import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.domain.account.UserProfile
 import com.deadliner.platform.PlatformIdentity
-import com.deadliner.platform.KmpBuildMetadata
+import com.deadliner.platform.DeadlinerCoreVersion
 import com.deadliner.platform.PlatformLogSink
 import com.deadliner.domain.ai.AiHabitProposal
 import com.deadliner.domain.ai.AiTaskProposal
@@ -84,7 +84,9 @@ private object PersistenceRuntime {
         PlatformLogSink.write(
             level = com.deadliner.platform.LogLevel.INFO,
             category = "kmp.build",
-            message = "compiledAtUtc=" + KmpBuildMetadata.compiledAtUtc,
+            message = "coreVersion=${DeadlinerCoreVersion.value}; " +
+                "bridgeVersion=${DeadlinerCoreVersion.bridgeVersion}; " +
+                "compiledAtUtc=${DeadlinerCoreVersion.compiledAtUtc}",
         )
         PlatformLogSink.write(
             level = com.deadliner.platform.LogLevel.INFO,
@@ -1404,7 +1406,19 @@ fun deadlinerPersistenceDiagnosticsJson(
 }
 
 @CName("deadliner_persistence_bridge_version")
-fun deadlinerPersistenceBridgeVersion(): Int = 12
+fun deadlinerPersistenceBridgeVersion(): Int = DeadlinerCoreVersion.bridgeVersion
+
+/**
+ * Writes the compile-time KMP core build identifier into caller-owned UTF-8 memory.
+ *
+ * The two-call convention matches the rest of this ABI: call with `output = null` to obtain the
+ * required byte capacity (including the null terminator), then call again with that buffer.
+ */
+@CName("deadliner_persistence_core_version")
+fun deadlinerPersistenceCoreVersion(
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int = writeCallerOwnedJson(DeadlinerCoreVersion.value, output, outputCapacity)
 
 /*
  * Some HarmonyOS system libcurl builds predate libcurl's WebSocket entry points. Ktor's Curl

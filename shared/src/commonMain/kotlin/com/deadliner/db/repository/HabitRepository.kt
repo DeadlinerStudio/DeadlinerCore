@@ -2,6 +2,7 @@ package com.deadliner.db.repository
 
 import com.deadliner.db.AppDatabase
 import com.deadliner.domain.habit.Habit
+import com.deadliner.domain.habit.HabitProgressEngine
 import com.deadliner.domain.habit.HabitRecordCommand
 import com.deadliner.domain.habit.HabitRecordCommandPolicy
 import com.deadliner.domain.habit.HabitRecord
@@ -13,6 +14,7 @@ import com.deadliner.platform.PlatformIdentity
 import com.deadliner.model.ChangeOperation
 import com.deadliner.sync.RepositoryMutationNotifier
 import kotlinx.datetime.Clock
+import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.json.Json
@@ -64,6 +66,11 @@ class HabitRepository(
         return executeRecordCommand(HabitRecordCommand.Set(habitUid, occurredOn, amount), occurredAt)
     }
 
+    /** Shared cyclic action: advance toward the goal, then reset the completed goal window to zero. */
+    fun applyPrimaryRecordAction(habitUid: String, occurredOn: String, occurredAt: String): HabitActionResult {
+        return executeRecordCommand(HabitRecordCommand.ApplyPrimary(habitUid, occurredOn), occurredAt)
+    }
+
     fun executeRecordCommand(command: HabitRecordCommand, occurredAt: String): HabitActionResult {
         val habitUid = command.habitUid
         val habit = find(habitUid) ?: return HabitActionResult(null, HabitActionOutcome.NOT_FOUND)
@@ -76,9 +83,17 @@ class HabitRepository(
         )
         if (decision.outcome != HabitActionOutcome.APPLIED) return HabitActionResult(habit, decision.outcome)
         val targetCount = decision.targetCountForDay ?: return HabitActionResult(habit, HabitActionOutcome.NO_OP)
+        val affectedRange = if (decision.clearGoalWindow) {
+            HabitProgressEngine.goalRange(habit, LocalDate.parse(command.occurredOn))
+        } else {
+            val date = LocalDate.parse(command.occurredOn)
+            date..date
+        }
         database.transaction {
             current.filter {
-                !it.isDeleted && it.occurredOn == command.occurredOn && it.status == HabitRecordStatus.COMPLETED
+                !it.isDeleted &&
+                    it.occurredOn in affectedRange.start.toString()..affectedRange.endInclusive.toString() &&
+                    it.status == HabitRecordStatus.COMPLETED
             }.forEach { softDeleteRecord(it, occurredAt) }
             if (targetCount > 0) {
                 writeRecord(

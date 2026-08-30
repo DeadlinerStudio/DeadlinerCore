@@ -26,6 +26,32 @@ try {
 
 `DeadlinerDatabase` exposes `categories`, `tasks`, `habits`, and `changeLog`. Business writes from the three repositories append a changelog record within the same SQL transaction.
 
+## Core build version
+
+Hosts can read the version that was embedded into the linked KMP binary:
+
+```kotlin
+import com.deadliner.platform.DeadlinerCoreVersion
+
+val version = DeadlinerCoreVersion.value        // e.g. "DeadlinerCore-20260830-01-main@ci"
+val compileDate = DeadlinerCoreVersion.compileDate
+val compileBranch = DeadlinerCoreVersion.compileBranch
+val compileUserName = DeadlinerCoreVersion.compileUserName
+val compiledAtUtc = DeadlinerCoreVersion.compiledAtUtc
+```
+
+The identifier always uses `DeadlinerCore-${compileDate(YYYYMMDD-HH)}-${compileBranch}@${compileUserName}`. By default it uses the UTC compile hour, the checked-out Git branch, and the local username. CI can override individual parts at compile time:
+
+```bash
+./gradlew :shared:assembleRelease \
+  -PdeadlinerCoreCompileDate=20260830-01 \
+  -PdeadlinerCoreCompileBranch=release/v12 \
+  -PdeadlinerCoreCompileUserName=ci
+./gradlew :shared:printDeadlinerCoreVersion
+```
+
+HarmonyOS callers can use `deadliner_persistence_core_version(output, outputCapacity)` with the existing two-call, caller-owned UTF-8 buffer convention; `deadliner_persistence_bridge_version()` retains the integer bridge ABI version for compatibility checks.
+
 ## Domain models
 
 ### Tasks
@@ -65,13 +91,14 @@ core.habits.create(habit: Habit)
 core.habits.update(habit: Habit)
 core.habits.saveRecord(record: HabitRecord, operation: ChangeOperation = UPDATE)
 core.habits.toggleRecord(habitUid, occurredOn, occurredAt): HabitActionResult
+core.habits.applyPrimaryRecordAction(habitUid, occurredOn, occurredAt): HabitActionResult
 core.habits.addRecordAmount(habitUid, occurredOn, amount, occurredAt): HabitActionResult
 core.habits.setRecordAmount(habitUid, occurredOn, amount, occurredAt): HabitActionResult
 core.habits.clearRecords(habitUid, occurredOn, occurredAt): HabitActionResult
 core.habits.delete(uid: String, updatedAt: String)
 ```
 
-`HabitPresentationEngine.statuses` produces the same date-specific due/progress/hint projection used by Habit List and Search. Each `HabitDayStatus` also exposes `canApplyPrimaryAction` and `primaryAction`: check-off habits use `CHECK_OFF`, while quantity habits use `ADD_QUANTITY` with `tracking.defaultIncrement`. Platforms must use this projection for enabled state and invoke the shared ViewModel/repository command instead of deciding future-date or increment behavior themselves. `HabitReminderPlanner.plan` produces concrete local date-times; platform notification code must deliver those instances without recreating recurrence rules.
+`HabitPresentationEngine.statuses` produces the same date-specific due/progress/hint projection used by Habit List and Search. Each `HabitDayStatus` also exposes `canApplyPrimaryAction` and `primaryAction`: check-off habits use `CHECK_OFF`, while quantity habits use `ADD_QUANTITY` with `tracking.defaultIncrement`. `applyPrimaryRecordAction` advances an incomplete goal without overshooting its target; the next primary action after completion clears records in the active goal window and returns progress to zero. Platforms must keep the action enabled for completed, due, non-future dates and invoke this shared command instead of deciding increment/reset behavior themselves. `HabitReminderPlanner.plan` produces concrete local date-times; platform notification code must deliver those instances without recreating recurrence rules.
 
 The AI editor proposal and LiFi `create_habit` contract use nested `schedule`, `goal`, `tracking`, and optional `reminder` objects. The executor accepts legacy `period/timesPerPeriod/goalType/totalTarget` input for one compatibility window and returns `compatibilityWarning` after conversion.
 

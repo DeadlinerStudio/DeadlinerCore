@@ -283,13 +283,7 @@ class HabitListViewModel(
     // ===== 辅助方法 =====
 
     private fun applyPrimaryRecordAction(uid: String, occurredOn: String, occurredAt: String): Habit? {
-        val habit = habitRepository.find(uid) ?: return null
-        val result = if (habit.tracking.mode == com.deadliner.domain.habit.HabitTrackingMode.QUANTITY) {
-            habitRepository.addRecordAmount(uid, occurredOn, habit.tracking.defaultIncrement, occurredAt)
-        } else {
-            habitRepository.toggleRecord(uid, occurredOn, occurredAt)
-        }
-        return result.habit
+        return habitRepository.applyPrimaryRecordAction(uid, occurredOn, occurredAt).habit
     }
 
     private fun buildState(

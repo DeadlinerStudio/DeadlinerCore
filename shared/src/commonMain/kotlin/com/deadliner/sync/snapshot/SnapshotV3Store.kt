@@ -10,6 +10,7 @@ import com.deadliner.domain.account.UserTier
 import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.capture.CaptureSource
 import com.deadliner.domain.category.Category
+import com.deadliner.domain.category.CategoryMutation
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitRecord
 import com.deadliner.domain.habit.HabitRecordStatus
@@ -143,8 +144,11 @@ class SnapshotV3Store(
             database.categoryQueries.softDeleteCategory(item.ver.ts, item.uid)
         }
         else item.doc?.let { value ->
-            database.categoryQueries.insertCategory(value.uid, value.name, value.iconKey, value.colorHex, value.isPreset.asLong(), value.sortOrder.toLong(), value.createdAt, value.updatedAt, 0)
-            database.categoryQueries.updateCategory(value.name, value.iconKey, value.colorHex, value.isPreset.asLong(), value.sortOrder.toLong(), value.updatedAt, 0, value.uid)
+            // Historical snapshots can contain platform icon names (for example SF Symbols).
+            // Persist only the shared semantic ID so every native client renders the same category.
+            val normalizedIconKey = CategoryMutation.normalizedIconKey(value.iconKey)
+            database.categoryQueries.insertCategory(value.uid, value.name, normalizedIconKey, value.colorHex, value.isPreset.asLong(), value.sortOrder.toLong(), value.createdAt, value.updatedAt, 0)
+            database.categoryQueries.updateCategory(value.name, normalizedIconKey, value.colorHex, value.isPreset.asLong(), value.sortOrder.toLong(), value.updatedAt, 0, value.uid)
         }
     }
 

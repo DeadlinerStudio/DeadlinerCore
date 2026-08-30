@@ -1,5 +1,6 @@
 # Kotlin/Gradle and IDE output
 .gradle/
+.hvigor/
 .kotlin/
 build/
 **/build/

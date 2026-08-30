@@ -7,8 +7,9 @@ import com.deadliner.sync.transport.SyncTransportPreconditionFailedException
 import com.deadliner.sync.transport.SyncWriteCondition
 import com.deadliner.sync.webdav.WebDavSyncTransport
 import com.deadliner.sync.webdav.WebDavTransportConfiguration
-import kotlinx.datetime.Clock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 
 /**
@@ -138,6 +139,10 @@ class WebDavChangeLogSyncFacade(
                 appliedResources = it.appliedResources,
             )
         }
+    } catch (error: CancellationException) {
+        // Cancellation is control flow (for example, app/database shutdown), not a sync failure.
+        // Preserve structured concurrency and avoid reporting a false failed outcome.
+        throw error
     } catch (error: Throwable) {
         val failureType = error::class.simpleName ?: "UnknownSyncFailure"
         logger.e("sync.webdav", "sync.failed type=" + failureType)

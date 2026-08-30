@@ -120,6 +120,47 @@ class HabitEnginesTest {
         assertEquals(HabitActionOutcome.FUTURE_DATE, future.outcome)
     }
 
+    @Test
+    fun primaryQuantityActionReachesTargetThenResetsTheGoalWindow() {
+        val habit = habit(
+            goal = HabitGoal(HabitGoalWindow.SCHEDULED_DAY, 20),
+            tracking = HabitTracking(HabitTrackingMode.QUANTITY, "words", 7),
+        )
+        val partial = listOf(record("partial", "2026-08-18", 14))
+        val completion = HabitRecordCommandPolicy.evaluate(
+            habit,
+            partial,
+            HabitRecordCommand.ApplyPrimary(habit.uid, "2026-08-18"),
+        )
+        assertEquals(20, completion.targetCountForDay)
+        assertEquals(false, completion.clearGoalWindow)
+
+        val completed = listOf(record("completed", "2026-08-18", 20))
+        val reset = HabitRecordCommandPolicy.evaluate(
+            habit,
+            completed,
+            HabitRecordCommand.ApplyPrimary(habit.uid, "2026-08-18"),
+        )
+        assertEquals(0, reset.targetCountForDay)
+        assertTrue(reset.clearGoalWindow)
+    }
+
+    @Test
+    fun completedWeeklyPrimaryActionResetsRecordsAcrossTheWeek() {
+        val weekly = habit(goal = HabitGoal(HabitGoalWindow.WEEK, 2))
+        val records = listOf(
+            record("monday", "2026-08-17"),
+            record("tuesday", "2026-08-18"),
+        )
+        val reset = HabitRecordCommandPolicy.evaluate(
+            weekly,
+            records,
+            HabitRecordCommand.ApplyPrimary(weekly.uid, "2026-08-19"),
+        )
+        assertEquals(HabitActionOutcome.APPLIED, reset.outcome)
+        assertTrue(reset.clearGoalWindow)
+    }
+
     private fun habit(
         uid: String = "habit",
         goal: HabitGoal = HabitGoal(),

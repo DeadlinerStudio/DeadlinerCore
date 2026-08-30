@@ -7,6 +7,7 @@ import com.deadliner.domain.habit.HabitPeriod
 import com.deadliner.domain.habit.HabitRecord
 import com.deadliner.domain.habit.HabitGoalType
 import com.deadliner.domain.habit.HabitGoal
+import com.deadliner.domain.habit.HabitGoalWindow
 import com.deadliner.domain.habit.HabitSchedule
 import com.deadliner.domain.habit.HabitScheduleKind
 import com.deadliner.domain.habit.HabitTracking
@@ -110,6 +111,63 @@ class HabitListViewModelIntegrationTest {
             assertEquals(10, status.doneCount)
             assertEquals(HabitPrimaryActionKind.ADD_QUANTITY, status.primaryAction.kind)
             assertEquals(5, status.primaryAction.amount)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun primaryActionResetsQuantityProgressAfterReachingTarget() {
+        val path = "${NSTemporaryDirectory()}deadliner-habit-reset-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            val today = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date.toString()
+            val habit = Habit(
+                uid = "words-reset",
+                name = "Learn words",
+                schedule = HabitSchedule(HabitScheduleKind.WEEKLY_DAYS, today, weekdaysMask = HabitWeekdays.ALL),
+                goal = HabitGoal(targetCount = 20),
+                tracking = HabitTracking(HabitTrackingMode.QUANTITY, unit = "words", defaultIncrement = 5),
+                createdAt = Clock.System.now().toString(),
+            )
+            val viewModel = HabitListViewModel(database.habits)
+            viewModel.saveHabitNow(habit)
+
+            repeat(4) { viewModel.toggleHabitRecordNow(habit.uid, today, Clock.System.now().toString()) }
+            assertEquals(20, viewModel.uiState.value.visibleHabits.single().doneCount)
+            assertTrue(viewModel.uiState.value.visibleHabits.single().canApplyPrimaryAction)
+
+            val reset = viewModel.toggleHabitRecordNow(habit.uid, today, Clock.System.now().toString())
+            assertEquals(0, reset.visibleHabits.single().doneCount)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun primaryActionResetsCompletedWeeklyWindowFromAnotherDueDay() {
+        val path = "${NSTemporaryDirectory()}deadliner-habit-week-reset-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            val habit = Habit(
+                uid = "weekly-reset",
+                name = "Run twice",
+                schedule = HabitSchedule(HabitScheduleKind.WEEKLY_DAYS, "2026-08-17", weekdaysMask = HabitWeekdays.WEEKDAYS),
+                goal = HabitGoal(HabitGoalWindow.WEEK, 2),
+                createdAt = "2026-08-17T00:00:00Z",
+            )
+            database.habits.create(habit)
+            database.habits.saveRecord(HabitRecord("monday", habit.uid, "2026-08-17", createdAt = "2026-08-17T08:00:00Z"))
+            database.habits.saveRecord(HabitRecord("tuesday", habit.uid, "2026-08-18", createdAt = "2026-08-18T08:00:00Z"))
+            val viewModel = HabitListViewModel(database.habits)
+            viewModel.loadNow()
+
+            val reset = viewModel.toggleHabitRecordNow(habit.uid, "2026-08-19", "2026-08-19T08:00:00Z")
+
+            assertEquals(0, reset.visibleHabits.single().doneCount)
+            assertTrue(database.habits.records(habit.uid).all(HabitRecord::isDeleted))
         } finally {
             database.close()
             remove(path)
