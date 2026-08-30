@@ -272,6 +272,47 @@ class DatabaseIntegrationTest {
     }
 
     @Test
+    fun taskSubtaskChangesAdvanceAggregateVersionAndRemoveMissingRemoteChildren() {
+        val sourcePath = "${NSTemporaryDirectory()}deadliner-task-aggregate-source-${NSUUID().UUIDString}.db"
+        val targetPath = "${NSTemporaryDirectory()}deadliner-task-aggregate-target-${NSUUID().UUIDString}.db"
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath, "source-device"))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath, "target-device"))
+        try {
+            val removedAt = "2026-08-30T11:00:00Z"
+            val first = TaskSubtask("subtask.first", "task.aggregate", "Keep", createdAt = NOW, updatedAt = NOW)
+            val second = TaskSubtask("subtask.second", "task.aggregate", "Remove", createdAt = NOW, updatedAt = NOW)
+            val task = Task(
+                uid = "task.aggregate",
+                title = "Aggregate task",
+                createdAt = NOW,
+                updatedAt = NOW,
+                subtasks = listOf(first, second),
+            )
+            source.tasks.create(task)
+            target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+
+            source.tasks.update(
+                task.copy(
+                    subtasks = listOf(first, second.copy(updatedAt = removedAt, isDeleted = true)),
+                ),
+            )
+            val updatedPayload = source.sync.mergeRemotePayload(null).payload
+            val updatedSnapshot = requireNotNull(Json.decodeFromString<ChangeLogSyncPayload>(updatedPayload).snapshot)
+            assertEquals(removedAt, updatedSnapshot.tasks.single { it.uid == task.uid }.ver.ts)
+
+            val result = target.sync.mergeRemotePayload(updatedPayload)
+
+            assertEquals(1, result.remoteApplied)
+            assertEquals(listOf(first.uid), target.tasks.find(task.uid)?.subtasks?.map(TaskSubtask::uid))
+        } finally {
+            source.close()
+            target.close()
+            remove(sourcePath)
+            remove(targetPath)
+        }
+    }
+
+    @Test
     fun legacyChangeOnlyPayloadIsRejectedByV4ProtocolGate() {
         val path = "${NSTemporaryDirectory()}deadliner-legacy-payload-${NSUUID().UUIDString}.db"
         val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))

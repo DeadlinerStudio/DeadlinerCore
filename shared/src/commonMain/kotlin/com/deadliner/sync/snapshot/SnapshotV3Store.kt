@@ -45,8 +45,13 @@ class SnapshotV3Store(
             ),
             tasks = withStoredTombstones(
                 database.taskQueries.selectAllIncludingDeleted(::task).executeAsList().map { value ->
-                    val document = value.copy(subtasks = database.taskSubtaskQueries.selectAllForTask(value.uid, ::subtask).executeAsList().filterNot(TaskSubtask::isDeleted))
-                    SnapshotV3TaskItem(value.uid, versionFor(TASK, value.uid, value.updatedAt), value.isDeleted, document.takeUnless(Task::isDeleted))
+                    val allSubtasks = database.taskSubtaskQueries.selectAllForTask(value.uid, ::subtask).executeAsList()
+                    val document = value.copy(subtasks = allSubtasks.filterNot(TaskSubtask::isDeleted))
+                    val aggregateUpdatedAt = sequenceOf(
+                        sequenceOf(value.updatedAt),
+                        allSubtasks.asSequence().map(TaskSubtask::updatedAt),
+                    ).flatten().maxOrNull() ?: value.updatedAt
+                    SnapshotV3TaskItem(value.uid, versionFor(TASK, value.uid, aggregateUpdatedAt), value.isDeleted, document.takeUnless(Task::isDeleted))
                 }, TASK, { it.uid }, { uid, version -> SnapshotV3TaskItem(uid, version, true) },
             ),
             habits = withStoredTombstones(
@@ -160,6 +165,10 @@ class SnapshotV3Store(
         item.doc?.let { value ->
             database.taskQueries.insertTask(value.uid, value.title, value.note, value.startAt, value.dueAt, value.state.persisted(), value.completedAt, value.categoryUid, value.isStarred.asLong(), value.calendarEventId, value.createdAt, value.updatedAt, 0)
             database.taskQueries.updateTask(value.title, value.note, value.startAt, value.dueAt, value.state.persisted(), value.completedAt, value.categoryUid, value.isStarred.asLong(), value.calendarEventId, value.updatedAt, 0, value.uid)
+            val incomingSubtaskUids = value.subtasks.mapTo(mutableSetOf(), TaskSubtask::uid)
+            database.taskSubtaskQueries.selectAllForTask(value.uid, ::subtask).executeAsList()
+                .filter { !it.isDeleted && it.uid !in incomingSubtaskUids }
+                .forEach { database.taskSubtaskQueries.softDeleteSubtask(item.ver.ts, it.uid) }
             value.subtasks.forEach(::saveSubtask)
         }
     }
