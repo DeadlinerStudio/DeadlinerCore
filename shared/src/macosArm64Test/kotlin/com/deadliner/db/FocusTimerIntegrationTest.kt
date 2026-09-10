@@ -4,10 +4,17 @@ import com.deadliner.domain.focus.FocusTimerCommand
 import com.deadliner.domain.focus.FocusTimerMode
 import com.deadliner.domain.focus.FocusTimerOutcome
 import com.deadliner.domain.task.Task
+import com.deadliner.domain.task.TaskAction
+import com.deadliner.domain.task.TaskActionOutcome
 import com.deadliner.domain.task.TaskState
 import com.deadliner.platform.FocusAlarmPort
 import com.deadliner.platform.FocusAlarmResult
+import com.deadliner.sync.SyncResourceKind
+import com.deadliner.sync.ChangeLogSyncPayload
+import com.deadliner.sync.snapshot.SnapshotV3Root
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import platform.Foundation.NSTemporaryDirectory
 import platform.Foundation.NSUUID
 import platform.posix.remove
@@ -15,9 +22,160 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.datetime.Instant
 
 class FocusTimerIntegrationTest {
+    @Test
+    fun snapshotV4PayloadUpgradesToV5WithEmptyFocusHistory() {
+        val path = temporaryDatabasePath("focus-v4-upgrade")
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "focus-test-device"))
+        try {
+            val result = database.sync.mergeRemotePayload(
+                """{"formatVersion":4,"snapshot":{"format_version":4,"version":{"ts":"2026-09-10T00:00:00Z","dev":"legacy"}}}""",
+            )
+
+            assertNull(result.failureMessage)
+            val upgraded = Json.decodeFromString<ChangeLogSyncPayload>(result.payload)
+            assertEquals(5, upgraded.formatVersion)
+            assertEquals(SnapshotV3Root.FORMAT_VERSION, upgraded.snapshot?.formatVersion)
+            assertTrue(upgraded.snapshot?.focusSessions.orEmpty().isEmpty())
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun taskMutationsRequireResolutionAndConfirmedActionCommitsWithSession() = runBlocking {
+        val path = temporaryDatabasePath("focus-task-guard")
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "focus-test-device"))
+        try {
+            database.tasks.create(task("task.guarded"))
+            database.tasks.create(task("task.other"))
+            val timer = database.createFocusTimerService()
+            timer.execute(
+                FocusTimerCommand.Start("task.guarded", FocusTimerMode.STOPWATCH),
+                instant("2026-09-10T08:00:00Z"),
+            )
+
+            assertEquals(
+                TaskActionOutcome.APPLIED,
+                database.tasks.applyAction(
+                    "task.other",
+                    TaskAction.MARK_COMPLETE,
+                    "2026-09-10T08:01:00Z",
+                ).outcome,
+            )
+            assertEquals(
+                TaskActionOutcome.TIMER_REQUIRES_RESOLUTION,
+                database.tasks.applyAction(
+                    "task.guarded",
+                    TaskAction.MARK_COMPLETE,
+                    "2026-09-10T08:02:00Z",
+                ).outcome,
+            )
+            assertEquals(
+                TaskActionOutcome.TIMER_REQUIRES_RESOLUTION,
+                database.tasks.update(
+                    assertNotNull(database.tasks.find("task.guarded")).copy(state = TaskState.COMPLETED),
+                ).outcome,
+            )
+            assertEquals(
+                TaskActionOutcome.TIMER_REQUIRES_RESOLUTION,
+                database.tasks.update(
+                    assertNotNull(database.tasks.find("task.guarded")).copy(isDeleted = true),
+                ).outcome,
+            )
+            assertEquals(
+                TaskActionOutcome.TIMER_REQUIRES_RESOLUTION,
+                database.tasks.delete("task.guarded", "2026-09-10T08:03:00Z").outcome,
+            )
+            assertEquals(TaskState.ACTIVE, database.tasks.find("task.guarded")?.state)
+
+            val resolved = timer.resolveTaskAction(
+                "task.guarded",
+                TaskAction.MARK_GIVE_UP,
+                instant("2026-09-10T08:10:00Z"),
+            )
+
+            assertEquals(FocusTimerOutcome.APPLIED, resolved.outcome)
+            assertEquals(600, assertNotNull(resolved.session).durationSeconds)
+            assertEquals(TaskState.ABANDONED, database.tasks.find("task.guarded")?.state)
+            assertEquals(FocusTimerOutcome.TIMER_NOT_FOUND, timer.current().outcome)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun confirmedDeletionKeepsFocusHistoryAndDeletesTaskAtomically() = runBlocking {
+        val path = temporaryDatabasePath("focus-task-delete")
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "focus-test-device"))
+        try {
+            database.tasks.create(task("task.delete"))
+            val timer = database.createFocusTimerService()
+            timer.execute(
+                FocusTimerCommand.Start("task.delete", FocusTimerMode.STOPWATCH),
+                instant("2026-09-10T09:00:00Z"),
+            )
+            assertEquals(
+                TaskActionOutcome.TIMER_REQUIRES_RESOLUTION,
+                database.tasks.delete("task.delete", "2026-09-10T09:04:00Z").outcome,
+            )
+
+            val resolved = timer.resolveTaskDeletion("task.delete", instant("2026-09-10T09:05:00Z"))
+
+            assertEquals(FocusTimerOutcome.APPLIED, resolved.outcome)
+            assertEquals(true, database.tasks.find("task.delete")?.isDeleted)
+            assertEquals("Focus task", database.focusSessions.forTask("task.delete").single().taskTitleSnapshot)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun snapshotV5SyncsCompletedSessionsButNeverTheActiveTimer() = runBlocking {
+        val sourcePath = temporaryDatabasePath("focus-sync-source")
+        val targetPath = temporaryDatabasePath("focus-sync-target")
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath, "focus-source-device"))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath, "focus-target-device"))
+        try {
+            source.tasks.create(task("task.sync"))
+            val timer = source.createFocusTimerService()
+            timer.execute(
+                FocusTimerCommand.Start("task.sync", FocusTimerMode.STOPWATCH),
+                instant("2026-09-10T10:00:00Z"),
+            )
+            val completed = assertNotNull(
+                timer.execute(FocusTimerCommand.Finish, instant("2026-09-10T10:20:00Z")).session,
+            )
+            timer.execute(
+                FocusTimerCommand.Start("task.sync", FocusTimerMode.STOPWATCH),
+                instant("2026-09-10T10:30:00Z"),
+            )
+
+            val firstPayload = source.sync.mergeRemotePayload(null).payload
+            val firstMerge = target.sync.mergeRemotePayload(firstPayload)
+
+            assertTrue(firstMerge.remoteApplied >= 1)
+            assertTrue(SyncResourceKind.FOCUS_SESSION in firstMerge.appliedResources)
+            assertEquals(1_200, target.focusSessions.find(completed.uid)?.durationSeconds)
+            assertEquals(FocusTimerOutcome.TIMER_NOT_FOUND, target.createFocusTimerService().current().outcome)
+
+            source.focusSessions.delete(completed.uid, "2026-09-10T11:00:00Z")
+            target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+            assertNull(target.focusSessions.find(completed.uid)?.takeUnless { it.isDeleted })
+        } finally {
+            source.close()
+            target.close()
+            remove(sourcePath)
+            remove(targetPath)
+        }
+    }
+
     @Test
     fun countdownAlarmTracksPauseResumeAndFinishWithoutOwningCompletion() = runBlocking {
         val path = temporaryDatabasePath("focus-alarm")

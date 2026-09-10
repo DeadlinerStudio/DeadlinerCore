@@ -10,6 +10,7 @@ import com.deadliner.domain.focus.FocusTimerMode
 import com.deadliner.domain.focus.FocusTimerOutcome
 import com.deadliner.domain.focus.FocusTimerSnapshot
 import com.deadliner.domain.focus.FocusTimerWarning
+import com.deadliner.domain.task.TaskAction
 import com.deadliner.service.focus.FocusTimerResult
 import com.deadliner.service.focus.FocusTimerService
 import kotlinx.coroutines.CoroutineScope
@@ -90,7 +91,18 @@ class FocusTimerViewModel(
     fun discard() = submit(FocusTimerCommand.Discard)
 
     fun selectTask(taskUid: String?) {
+        if (_uiState.value.isBusy) return
         refreshStatistics(nowProvider(), taskUid)
+    }
+
+    fun resolveTaskAction(taskUid: String, action: TaskAction) {
+        if (!beginOperation()) return
+        scope.launch { resolveTaskActionNow(taskUid, action) }
+    }
+
+    fun resolveTaskDeletion(taskUid: String) {
+        if (!beginOperation()) return
+        scope.launch { resolveTaskDeletionNow(taskUid) }
     }
 
     fun adjustSessionDuration(sessionUid: String, durationSeconds: Long) {
@@ -121,6 +133,20 @@ class FocusTimerViewModel(
             .getOrElse(::publishError)
     }
 
+    suspend fun resolveTaskActionNow(taskUid: String, action: TaskAction): FocusTimerUiState {
+        val now = nowProvider()
+        _uiState.update { it.copy(isBusy = true, error = null) }
+        return runCatching { publish(timerService.resolveTaskAction(taskUid, action, now), now) }
+            .getOrElse(::publishError)
+    }
+
+    suspend fun resolveTaskDeletionNow(taskUid: String): FocusTimerUiState {
+        val now = nowProvider()
+        _uiState.update { it.copy(isBusy = true, error = null) }
+        return runCatching { publish(timerService.resolveTaskDeletion(taskUid, now), now) }
+            .getOrElse(::publishError)
+    }
+
     suspend fun adjustSessionDurationNow(sessionUid: String, durationSeconds: Long): FocusTimerUiState {
         val now = nowProvider()
         _uiState.update { it.copy(isBusy = true, error = null) }
@@ -148,9 +174,14 @@ class FocusTimerViewModel(
     }
 
     private fun submit(command: FocusTimerCommand) {
-        if (_uiState.value.isBusy) return
-        _uiState.update { it.copy(isBusy = true, error = null) }
+        if (!beginOperation()) return
         scope.launch { executeNow(command) }
+    }
+
+    private fun beginOperation(): Boolean {
+        if (_uiState.value.isBusy) return false
+        _uiState.update { it.copy(isBusy = true, error = null) }
+        return true
     }
 
     private fun publish(result: FocusTimerResult, now: Instant): FocusTimerUiState {

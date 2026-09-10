@@ -11,16 +11,16 @@
 
 ## 阶段 2：基础设施
 
-- [ ] 在 breaking schema/sync change 前创建一次全工作区 Git 安全提交。
+- [x] 在 breaking schema/sync change 前创建全工作区 Git 安全提交 `1d7a095`。
 - [x] 增加 Focus 领域合同、状态机、聚合规则与 common tests。
-- [ ] 增加独立 `FocusTaskPolicy`，供 Task 入口守门复用。
+- [x] 增加独立 `FocusTaskPolicy`，供 Task 入口守门复用。
 - [x] 增加 `focus_session`、`active_focus_timer` schema、queries、migration 与数据库测试。
 - [x] 提取可在组合事务中复用的 Task action mutation。
-- [ ] 为公开 Task action 结果新增 `TIMER_REQUIRES_RESOLUTION` 并迁移所有消费者。
+- [x] 为公开 Task action 结果新增 `TIMER_REQUIRES_RESOLUTION`，并迁移 Core Task ViewModel 消费者。
 - [x] 实现 `FinishAndCompleteTask` 原子事务与一致性测试。
 - [x] 增加 UTC wall-clock 锚点与到点通知端口，实现 `FocusTimerService`。
 - [ ] 在平台展示批次接入同进程 monotonic clock。
-- [ ] 将完成会话接入 Snapshot v5、ChangeLog/WebDAV、DeadlinerServer 与 Backup。
+- [x] 将完成会话接入 Snapshot v5、ChangeLog/WebDAV、DeadlinerServer 与 Backup。
 - [x] 更新 Core API reference 与 v6→v7 migration 说明。
 - [ ] 更新 Android/iOS/HarmonyOS bridge contract。
 
@@ -40,10 +40,12 @@
 - [x] 运行 common unit tests、macOS SQLDelight integration tests 和 migration verification。
 - [ ] 运行 Android、iOS、HarmonyOS 目标编译；HarmonyOS 命令显式设置 `DEVECO_HOME`。
 - [ ] 执行三端后台、强杀、重启、时间回拨/前跳与通知权限矩阵。
-- [ ] 执行 Snapshot v4→v5、WebDAV/Server 冲突、远端 Task 失活与备份恢复测试。
-- [x] 执行 Core 第一批核心大文件等价扫描；新增/修改的 Focus 核心文件均小于 1000 行。
-- [x] 执行 Core 第一批规格校验。
+- [x] 执行 Snapshot v4→v5、WebDAV/Server 往返与备份恢复测试。
+- [ ] 执行远端 Task 失活恢复及三端冲突手工测试。
+- [x] 执行 Core 两批核心大文件等价扫描；新增/修改的 Focus 核心文件均小于 1000 行。
+- [x] 执行 Core 两批规格校验。
 - [x] 回写 Core 第一批模块映射、实际文件和验证结果。
+- [x] 运行 Core 第二批 macOS ARM64 tests 与 migration verification。
 
 ## 后续阶段：分析与 Habit 探索
 

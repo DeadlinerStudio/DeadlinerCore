@@ -7,6 +7,7 @@ import com.deadliner.db.repository.focus.FocusSessionRepository
 import com.deadliner.domain.focus.ActiveFocusTimer
 import com.deadliner.domain.focus.FocusCompletionKind
 import com.deadliner.domain.focus.FocusSession
+import com.deadliner.domain.focus.FocusTaskPolicy
 import com.deadliner.domain.focus.FocusTimerCommand
 import com.deadliner.domain.focus.FocusTimerEngine
 import com.deadliner.domain.focus.FocusTimerMode
@@ -62,33 +63,85 @@ class FocusTimerService(
         resultForActive(FocusTimerOutcome.NO_OP, active, now)
     }
 
-    private fun start(command: FocusTimerCommand.Start, now: Instant): FocusTimerResult {
-        activeTimers.current()?.let { active ->
-            return resultForActive(FocusTimerOutcome.TIMER_ALREADY_ACTIVE, active, now)
+    suspend fun resolveTaskAction(
+        taskUid: String,
+        action: TaskAction,
+        now: Instant = Clock.System.now(),
+    ): FocusTimerResult = commandMutex.withLock {
+        val active = activeTimers.current() ?: return@withLock FocusTimerResult(FocusTimerOutcome.TIMER_NOT_FOUND)
+        val task = tasks.find(taskUid) ?: return@withLock FocusTimerResult(FocusTimerOutcome.TASK_NOT_FOUND)
+        if (active.taskUid != taskUid || !FocusTaskPolicy.requiresResolution(task, action, active)) {
+            return@withLock resultForActive(FocusTimerOutcome.INVALID_STATE, active, now, task)
         }
-        if (command.taskUid.isBlank()) return FocusTimerResult(FocusTimerOutcome.TASK_REQUIRED)
-        val task = tasks.find(command.taskUid) ?: return FocusTimerResult(FocusTimerOutcome.TASK_NOT_FOUND)
-        if (!task.canFocus()) return FocusTimerResult(FocusTimerOutcome.TASK_NOT_ACTIVE, task = task)
+        finishAndApplyTaskAction(active, now, action, FocusCompletionKind.FOCUS_AND_TASK_CHANGED)
+    }
 
-        val active = runCatching {
-            ActiveFocusTimer(
-                sessionUid = PlatformIdentity.newId(),
-                taskUid = task.uid,
-                taskTitleSnapshot = task.title.ifBlank { task.uid },
-                mode = command.mode,
-                plannedDurationSeconds = command.plannedDurationSeconds,
-                state = FocusTimerState.RUNNING,
-                startedAt = now.toString(),
-                runningSegmentStartedAt = now.toString(),
-                accumulatedSeconds = 0,
-                updatedAt = now.toString(),
-            )
-        }.getOrElse {
-            return FocusTimerResult(FocusTimerOutcome.INVALID_DURATION, task = task)
+    suspend fun resolveTaskDeletion(
+        taskUid: String,
+        now: Instant = Clock.System.now(),
+    ): FocusTimerResult = commandMutex.withLock {
+        val active = activeTimers.current() ?: return@withLock FocusTimerResult(FocusTimerOutcome.TIMER_NOT_FOUND)
+        val task = tasks.find(taskUid) ?: return@withLock FocusTimerResult(FocusTimerOutcome.TASK_NOT_FOUND)
+        if (!FocusTaskPolicy.requiresResolutionForDelete(taskUid, active)) {
+            return@withLock resultForActive(FocusTimerOutcome.INVALID_STATE, active, now, task)
         }
-        activeTimers.save(active)
-        val alarmWarning = scheduleAlarm(active)
-        return resultForActive(FocusTimerOutcome.APPLIED, active, now, task, alarmWarning)
+        finishAndDeleteTask(active, task, now)
+    }
+
+    private fun start(command: FocusTimerCommand.Start, now: Instant): FocusTimerResult {
+        var outcome = FocusTimerOutcome.INVALID_STATE
+        var resolvedTask: Task? = null
+        var resolvedActive: ActiveFocusTimer? = null
+        database.transaction {
+            val existingActive = activeTimers.current()
+            if (existingActive != null) {
+                outcome = FocusTimerOutcome.TIMER_ALREADY_ACTIVE
+                resolvedActive = existingActive
+                return@transaction
+            }
+            if (command.taskUid.isBlank()) {
+                outcome = FocusTimerOutcome.TASK_REQUIRED
+                return@transaction
+            }
+            val task = tasks.find(command.taskUid)
+            if (task == null) {
+                outcome = FocusTimerOutcome.TASK_NOT_FOUND
+                return@transaction
+            }
+            resolvedTask = task
+            if (!task.canFocus()) {
+                outcome = FocusTimerOutcome.TASK_NOT_ACTIVE
+                return@transaction
+            }
+            val active = runCatching {
+                ActiveFocusTimer(
+                    sessionUid = PlatformIdentity.newId(),
+                    taskUid = task.uid,
+                    taskTitleSnapshot = task.title.ifBlank { task.uid },
+                    mode = command.mode,
+                    plannedDurationSeconds = command.plannedDurationSeconds,
+                    state = FocusTimerState.RUNNING,
+                    startedAt = now.toString(),
+                    runningSegmentStartedAt = now.toString(),
+                    accumulatedSeconds = 0,
+                    updatedAt = now.toString(),
+                )
+            }.getOrNull()
+            if (active == null) {
+                outcome = FocusTimerOutcome.INVALID_DURATION
+                return@transaction
+            }
+            activeTimers.save(active)
+            resolvedActive = active
+            outcome = FocusTimerOutcome.APPLIED
+        }
+        val active = resolvedActive
+        return when {
+            active != null && outcome == FocusTimerOutcome.APPLIED ->
+                resultForActive(outcome, active, now, resolvedTask, scheduleAlarm(active))
+            active != null -> resultForActive(outcome, active, now)
+            else -> FocusTimerResult(outcome, task = resolvedTask)
+        }
     }
 
     private fun pause(active: ActiveFocusTimer, now: Instant): FocusTimerResult {
@@ -131,45 +184,97 @@ class FocusTimerService(
         completionKind: FocusCompletionKind,
         completeTask: Boolean,
     ): FocusTimerResult {
-        val task = tasks.find(active.taskUid)
-        if (completeTask && (task == null || !task.canFocus())) {
-            return FocusTimerResult(
-                outcome = if (task == null) FocusTimerOutcome.TASK_NOT_FOUND else FocusTimerOutcome.TASK_NOT_ACTIVE,
-                activeTimer = active,
-                snapshot = FocusTimerEngine.snapshot(
-                    active,
-                    now,
-                    task?.title ?: active.taskTitleSnapshot,
-                    taskIsActive = false,
-                ),
-                task = task,
+        if (completeTask) {
+            return finishAndApplyTaskAction(
+                active,
+                now,
+                TaskAction.MARK_COMPLETE,
+                FocusCompletionKind.FOCUS_AND_TASK_COMPLETED,
             )
         }
-
+        val task = tasks.find(active.taskUid)
         val completed = FocusTimerEngine.finish(active, now, completionKind)
         val session = completed.session
             ?: return resultForActive(completed.outcome, active, now, task)
-        var completedTask: Task? = task
         database.transaction {
             sessions.saveInTransaction(session, ChangeOperation.INSERT)
             activeTimers.clear()
-            if (completeTask) {
-                val taskResult = tasks.applyActionInTransaction(active.taskUid, TaskAction.MARK_COMPLETE, now.toString())
-                check(taskResult.outcome == TaskActionOutcome.APPLIED) {
-                    "Focus finish-and-complete could not transition task ${active.taskUid}"
-                }
-                completedTask = taskResult.task
-            }
         }
         mutationNotifier.notifyMutation()
         val alarmWarning = cancelAlarm(active.sessionUid)
         return FocusTimerResult(
             outcome = FocusTimerOutcome.APPLIED,
             session = session,
-            task = completedTask,
+            task = task,
             warning = alarmWarning,
         )
     }
+
+    private fun finishAndApplyTaskAction(
+        active: ActiveFocusTimer,
+        now: Instant,
+        action: TaskAction,
+        completionKind: FocusCompletionKind,
+    ): FocusTimerResult {
+        val task = tasks.find(active.taskUid)
+        if (task == null || !task.canFocus()) {
+            return inactiveTaskResult(active, task, now)
+        }
+        val completed = FocusTimerEngine.finish(active, now, completionKind)
+        val session = completed.session
+            ?: return resultForActive(completed.outcome, active, now, task)
+        var updatedTask: Task? = task
+        database.transaction {
+            sessions.saveInTransaction(session, ChangeOperation.INSERT)
+            activeTimers.clear()
+            val taskResult = tasks.applyActionInTransaction(active.taskUid, action, now.toString())
+            check(taskResult.outcome == TaskActionOutcome.APPLIED) {
+                "Focus resolution could not apply $action to task ${active.taskUid}"
+            }
+            updatedTask = taskResult.task
+        }
+        mutationNotifier.notifyMutation()
+        return FocusTimerResult(
+            outcome = FocusTimerOutcome.APPLIED,
+            session = session,
+            task = updatedTask,
+            warning = cancelAlarm(active.sessionUid),
+        )
+    }
+
+    private fun finishAndDeleteTask(
+        active: ActiveFocusTimer,
+        task: Task,
+        now: Instant,
+    ): FocusTimerResult {
+        val completed = FocusTimerEngine.finish(active, now, FocusCompletionKind.FOCUS_AND_TASK_CHANGED)
+        val session = completed.session
+            ?: return resultForActive(completed.outcome, active, now, task)
+        database.transaction {
+            sessions.saveInTransaction(session, ChangeOperation.INSERT)
+            activeTimers.clear()
+            tasks.deleteInTransaction(task.uid, now.toString())
+        }
+        mutationNotifier.notifyMutation()
+        return FocusTimerResult(
+            outcome = FocusTimerOutcome.APPLIED,
+            session = session,
+            task = task.copy(updatedAt = now.toString(), isDeleted = true),
+            warning = cancelAlarm(active.sessionUid),
+        )
+    }
+
+    private fun inactiveTaskResult(active: ActiveFocusTimer, task: Task?, now: Instant) = FocusTimerResult(
+        outcome = if (task == null) FocusTimerOutcome.TASK_NOT_FOUND else FocusTimerOutcome.TASK_NOT_ACTIVE,
+        activeTimer = active,
+        snapshot = FocusTimerEngine.snapshot(
+            active,
+            now,
+            task?.title ?: active.taskTitleSnapshot,
+            taskIsActive = false,
+        ),
+        task = task,
+    )
 
     private fun discard(active: ActiveFocusTimer): FocusTimerResult {
         activeTimers.clear()

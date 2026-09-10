@@ -3,6 +3,7 @@ package com.deadliner.sync.server.mapping
 import com.deadliner.domain.account.UserProfile
 import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.category.Category
+import com.deadliner.domain.focus.FocusSession
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.domain.task.Task
@@ -14,6 +15,7 @@ import com.deadliner.sync.server.model.ServerSyncMutation
 import com.deadliner.sync.snapshot.SnapshotV3CaptureItem
 import com.deadliner.sync.snapshot.SnapshotV3CategoryItem
 import com.deadliner.sync.snapshot.SnapshotV3EntityVersion
+import com.deadliner.sync.snapshot.SnapshotV3FocusSessionItem
 import com.deadliner.sync.snapshot.SnapshotV3HabitDocument
 import com.deadliner.sync.snapshot.SnapshotV3HabitItem
 import com.deadliner.sync.snapshot.SnapshotV3MemoryFragmentItem
@@ -34,7 +36,7 @@ data class ServerSyncEntityKey(
 )
 
 /**
- * The only mapping between Snapshot V4 aggregate documents and the generic Server V2 envelope.
+ * The only mapping between Snapshot V5 aggregate documents and the generic Server V2 envelope.
  * Platform code must not duplicate these payload rules.
  */
 class ServerSnapshotMapper(
@@ -54,6 +56,9 @@ class ServerSnapshotMapper(
         }
         snapshot.tasks.forEach { item ->
             add(mutation(item.uid, ServerSyncEntityKind.TASK, item.ver, item.deleted, item.doc?.let(json::encodeToJsonElement), baseChangeIds, mutationId))
+        }
+        snapshot.focusSessions.forEach { item ->
+            add(mutation(item.uid, ServerSyncEntityKind.FOCUS_SESSION, item.ver, item.deleted, item.doc?.let(json::encodeToJsonElement), baseChangeIds, mutationId))
         }
         snapshot.habits.forEach { item ->
             add(mutation(item.uid, ServerSyncEntityKind.HABIT, item.ver, item.deleted, item.doc?.let(json::encodeToJsonElement), baseChangeIds, mutationId))
@@ -88,6 +93,7 @@ class ServerSnapshotMapper(
         require(changes.isNotEmpty()) { "Cannot create a server snapshot from an empty change page." }
         val categories = mutableListOf<SnapshotV3CategoryItem>()
         val tasks = mutableListOf<SnapshotV3TaskItem>()
+        val focusSessions = mutableListOf<SnapshotV3FocusSessionItem>()
         val habits = mutableListOf<SnapshotV3HabitItem>()
         val captures = mutableListOf<SnapshotV3CaptureItem>()
         val memories = mutableListOf<SnapshotV3MemoryFragmentItem>()
@@ -115,6 +121,12 @@ class ServerSnapshotMapper(
                     deleted,
                     change.decodeOrNull<Task>(deleted).also { it?.requireUid(change) },
                 )
+                ServerSyncEntityKind.FOCUS_SESSION -> focusSessions += SnapshotV3FocusSessionItem(
+                    change.entityUid,
+                    version,
+                    deleted,
+                    change.decodeOrNull<FocusSession>(deleted).also { it?.requireUid(change) },
+                )
                 ServerSyncEntityKind.HABIT -> habits += SnapshotV3HabitItem(
                     change.entityUid,
                     version,
@@ -139,7 +151,7 @@ class ServerSnapshotMapper(
                     require(change.entityUid == MEMORY_USER_PROFILE_UID) {
                         "Memory profile must use entity UID '$MEMORY_USER_PROFILE_UID'."
                     }
-                    require(!deleted) { "Snapshot V4 cannot represent a deleted memory user profile." }
+                    require(!deleted) { "Snapshot V5 cannot represent a deleted memory user profile." }
                     val payload = change.decode<MemoryUserProfilePayload>()
                     memoryUserProfile = SnapshotV3MemoryUserProfileItem(version, payload.content)
                 }
@@ -158,6 +170,7 @@ class ServerSnapshotMapper(
             version = SnapshotV3Version(latest.committedAt, SERVER_DEVICE_ID),
             categories = categories,
             tasks = tasks,
+            focusSessions = focusSessions,
             habits = habits,
             captures = captures,
             memoryFragments = memories,
@@ -199,6 +212,7 @@ class ServerSnapshotMapper(
 
     private fun Category.requireUid(change: ServerSyncChange) = require(uid == change.entityUid) { uidMismatch(change, uid) }
     private fun Task.requireUid(change: ServerSyncChange) = require(uid == change.entityUid) { uidMismatch(change, uid) }
+    private fun FocusSession.requireUid(change: ServerSyncChange) = require(uid == change.entityUid) { uidMismatch(change, uid) }
     private fun Habit.requireUid(change: ServerSyncChange) = require(uid == change.entityUid) { uidMismatch(change, uid) }
     private fun CaptureItem.requireUid(change: ServerSyncChange) = require(uid == change.entityUid) { uidMismatch(change, uid) }
     private fun MemoryFragment.requireUid(change: ServerSyncChange) = require(uid == change.entityUid) { uidMismatch(change, uid) }

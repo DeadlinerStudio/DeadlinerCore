@@ -8,21 +8,26 @@ import kotlinx.serialization.json.JsonElement
 object ServerSyncEntityKind {
     const val CATEGORY = "category"
     const val TASK = "task"
+    const val FOCUS_SESSION = "focus_session"
     const val HABIT = "habit"
     const val CAPTURE = "capture"
     const val MEMORY_FRAGMENT = "memory_fragment"
     const val MEMORY_USER_PROFILE = "memory_user_profile"
     const val USER_PROFILE = "user_profile"
 
-    val snapshotV4Kinds: Set<String> = setOf(
+    val snapshotV5Kinds: Set<String> = setOf(
         CATEGORY,
         TASK,
+        FOCUS_SESSION,
         HABIT,
         CAPTURE,
         MEMORY_FRAGMENT,
         MEMORY_USER_PROFILE,
         USER_PROFILE,
     )
+
+    @Deprecated("Use snapshotV5Kinds")
+    val snapshotV4Kinds: Set<String> = snapshotV5Kinds
 }
 
 @Serializable

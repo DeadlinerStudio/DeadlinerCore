@@ -4,17 +4,58 @@ import com.deadliner.db.DeadlinerDatabase
 import com.deadliner.db.MacosDatabaseDriverFactory
 import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.capture.CaptureSource
+import com.deadliner.domain.focus.FocusTimerCommand
+import com.deadliner.domain.focus.FocusTimerMode
+import com.deadliner.domain.focus.FocusTimerOutcome
 import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.domain.task.Task
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
 import kotlin.test.assertNull
+import kotlin.test.assertNotNull
+import kotlinx.coroutines.runBlocking
 import platform.Foundation.NSTemporaryDirectory
 import platform.Foundation.NSUUID
 import platform.posix.remove
 
 class BackupServiceIntegrationTest {
+    @Test
+    fun restoreIncludesCompletedFocusSessionsAndClearsDeviceLocalTimer() {
+        withDatabase { database ->
+            database.tasks.create(Task("task.focus-backup", "Focus backup", createdAt = NOW, updatedAt = NOW))
+            val timer = database.createFocusTimerService()
+            val completed = assertNotNull(
+                runBlocking {
+                    timer.execute(
+                        FocusTimerCommand.Start("task.focus-backup", FocusTimerMode.STOPWATCH),
+                        kotlinx.datetime.Instant.parse("2026-08-13T00:00:00Z"),
+                    )
+                    timer.execute(
+                        FocusTimerCommand.Finish,
+                        kotlinx.datetime.Instant.parse("2026-08-13T00:20:00Z"),
+                    ).session
+                },
+            )
+            val backup = database.backups.export()
+
+            database.focusSessions.delete(completed.uid, LATER)
+            runBlocking {
+                timer.execute(
+                    FocusTimerCommand.Start("task.focus-backup", FocusTimerMode.STOPWATCH),
+                    kotlinx.datetime.Instant.parse("2026-08-13T02:00:00Z"),
+                )
+            }
+            database.backups.restore(backup)
+
+            assertEquals(1_200, database.focusSessions.find(completed.uid)?.durationSeconds)
+            assertEquals(
+                FocusTimerOutcome.TIMER_NOT_FOUND,
+                runBlocking { database.createFocusTimerService().current() }.outcome,
+            )
+        }
+    }
+
     @Test
     fun restoreReplacesLocalDataAndIncludesLifiMemory() {
         withDatabase { database ->

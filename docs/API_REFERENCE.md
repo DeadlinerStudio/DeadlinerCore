@@ -24,7 +24,7 @@ try {
 }
 ```
 
-`DeadlinerDatabase` exposes `categories`, `tasks`, `habits`, `focusSessions`, and `changeLog`. Business writes append a changelog record within the same SQL transaction. Focus sessions are available in the local Core API, but are not part of the current Snapshot v4 network/backup contract yet.
+`DeadlinerDatabase` exposes `categories`, `tasks`, `habits`, `focusSessions`, and `changeLog`. Business writes append a changelog record within the same SQL transaction. Completed focus sessions are independent Snapshot v5/WebDAV/DeadlinerServer/backup resources; the active timer remains device-local and is cleared during backup restore.
 
 ## Core build version
 
@@ -105,7 +105,9 @@ core.focusSessions.adjustDuration(sessionUid, lowerDurationSeconds, updatedAt)
 core.focusSessions.delete(sessionUid, updatedAt)
 ```
 
-`FocusTimerViewModel` exposes the active timer, today duration/session count, selected Task today/all-time duration, recent sessions, and session adjustment/deletion. Call `tick()` once per visible second; it recalculates display state from in-memory anchors and does not persist per-second updates. Platform bridge helpers and Snapshot/Server/Backup support are pending the next contract batch.
+`FocusTimerViewModel` exposes the active timer, today duration/session count, selected Task today/all-time duration, recent sessions, session adjustment/deletion, and explicit resolution of a state change or deletion while timing. Call `tick()` once per visible second; it recalculates display state from in-memory anchors and does not persist per-second updates. Platform bridge helpers remain a platform integration task.
+
+Public Task mutation APIs return `TaskActionOutcome.TIMER_REQUIRES_RESOLUTION` when the requested state change or deletion targets the Task bound to the active timer. After user confirmation, route the operation through `FocusTimerService.resolveTaskAction(...)` or `resolveTaskDeletion(...)`; these save the elapsed session, clear the active timer, and mutate the Task in one transaction.
 
 ### Habits
 

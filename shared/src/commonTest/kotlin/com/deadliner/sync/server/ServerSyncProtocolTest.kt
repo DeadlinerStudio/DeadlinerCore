@@ -47,8 +47,8 @@ class ServerSyncProtocolTest {
     @Test
     fun protocolKeepsSnapshotKindsExplicit() {
         assertEquals(
-            setOf("category", "task", "habit", "capture", "memory_fragment", "memory_user_profile", "user_profile"),
-            ServerSyncEntityKind.snapshotV4Kinds,
+            setOf("category", "task", "focus_session", "habit", "capture", "memory_fragment", "memory_user_profile", "user_profile"),
+            ServerSyncEntityKind.snapshotV5Kinds,
         )
     }
 

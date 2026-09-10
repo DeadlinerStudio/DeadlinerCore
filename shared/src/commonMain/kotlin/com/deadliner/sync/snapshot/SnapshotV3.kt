@@ -3,6 +3,7 @@ package com.deadliner.sync.snapshot
 import com.deadliner.domain.account.UserProfile
 import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.category.Category
+import com.deadliner.domain.focus.FocusSession
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitRecord
 import com.deadliner.domain.memory.MemoryFragment
@@ -12,8 +13,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * The portable full-state snapshot format. Version 4 carries the independent Habit aggregate.
- * with one typed document while retaining a per-entity LWW version and explicit tombstones.
+ * The portable full-state snapshot format. Version 5 adds completed Task focus sessions while
+ * retaining per-entity LWW versions and explicit tombstones.
  */
 @Serializable
 data class SnapshotV3Root(
@@ -22,6 +23,8 @@ data class SnapshotV3Root(
     val version: SnapshotV3Version,
     val categories: List<SnapshotV3CategoryItem> = emptyList(),
     val tasks: List<SnapshotV3TaskItem> = emptyList(),
+    @SerialName("focus_sessions")
+    val focusSessions: List<SnapshotV3FocusSessionItem> = emptyList(),
     val habits: List<SnapshotV3HabitItem> = emptyList(),
     val captures: List<SnapshotV3CaptureItem> = emptyList(),
     @SerialName("memory_fragments")
@@ -32,7 +35,7 @@ data class SnapshotV3Root(
     val userProfiles: List<SnapshotV3UserProfileItem> = emptyList(),
 ) {
     companion object {
-        const val FORMAT_VERSION = 4
+        const val FORMAT_VERSION = 5
     }
 }
 
@@ -71,6 +74,14 @@ data class SnapshotV3TaskItem(
     val ver: SnapshotV3EntityVersion,
     val deleted: Boolean,
     val doc: Task? = null,
+)
+
+@Serializable
+data class SnapshotV3FocusSessionItem(
+    val uid: String,
+    val ver: SnapshotV3EntityVersion,
+    val deleted: Boolean,
+    val doc: FocusSession? = null,
 )
 
 /** Habit records are part of their parent habit aggregate; due dates are derived from Habit.schedule. */

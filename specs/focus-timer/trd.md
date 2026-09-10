@@ -16,10 +16,10 @@
 
 ## 1. 规格冻结时现状摘要
 
-- KMP 已有独立 `Task` 聚合、`TaskStateMachine`、SQLDelight repository、ChangeLog/WebDAV、Snapshot v4、DeadlinerServer 与 Backup 链路。
+- 冻结前 KMP 已有独立 `Task` 聚合、`TaskStateMachine`、SQLDelight repository、ChangeLog/WebDAV、Snapshot v4、DeadlinerServer 与 Backup 链路。
 - `TaskRepository` 是持久化 Task 状态迁移的权威，但当前 `applyAction` 不感知活动计时。
 - 当前没有专注会话、活动计时、统一计时状态机或计时通知端口。
-- Snapshot 根合同当前 `formatVersion = 4`，Server entity kind 尚无 `focus_session`。
+- 冻结前 Snapshot 根合同为 `formatVersion = 4`，Server entity kind 尚无 `focus_session`；Core 第二批已升级为 Snapshot v5 并补齐该资源。
 - MVP 已收敛为 Task-only；Habit 不进入本轮合同、schema、同步或 bridge。
 
 ## 2. 技术目标
@@ -95,6 +95,7 @@ enum class FocusTimerMode { STOPWATCH, COUNTDOWN }
 enum class FocusCompletionKind {
     FOCUS_ONLY,
     FOCUS_AND_TASK_COMPLETED,
+    FOCUS_AND_TASK_CHANGED,
     COUNTDOWN_ELAPSED,
     TASK_BECAME_INACTIVE,
 }
@@ -532,7 +533,7 @@ Task 状态协作还会修改 `TaskRepository` 及所有消费 `TaskActionOutcom
 5. 同步导致 Task 失活时使用本机感知时刻停止，并允许用户向下更正。
 6. Task 标题快照首阶段保存现有完整标题；统一最大长度在平台表单契约接线前补齐。
 
-Snapshot v5 与公开 `TaskActionOutcome` 新枚举值暂不进入第一批，避免在当前未提交 Widget 改动上直接叠加 breaking change。
+Snapshot v5 与公开 `TaskActionOutcome` 新枚举值不进入第一批，避免在未提交 Widget 改动上直接叠加 breaking change。第二批开始前已建立包含 Widget 与 Focus 第一批的全工作区安全提交 `1d7a095`。
 
 ## 21. Core 第一批实现回写
 
@@ -542,3 +543,12 @@ Snapshot v5 与公开 `TaskActionOutcome` 新枚举值暂不进入第一批，�
 - 今日边界由当前时区的相邻本地午夜转换为 UTC，已覆盖 DST 23 小时自然日测试。
 - 第一批测试覆盖暂停时间排除、提前结束、自然到点、重启恢复、原子结束并完成、会话更正/删除、通知重排和轻量统计。
 - 第 8 节的所有 Task 入口守门，以及第 13～16 节的 Snapshot v5、WebDAV、Server、Backup 和三端 bridge，等待全工作区 Git 安全检查点后进入下一批。
+
+## 22. Core 第二批实现回写
+
+- 安全检查点已创建：`1d7a095`。
+- `FocusTaskPolicy`、`TaskRepository` 与共享 Task ViewModel 已接入 `TIMER_REQUIRES_RESOLUTION`；状态变更、删除与计时启动的检查和写入均位于数据库事务中。
+- `FocusTimerService.resolveTaskAction` 与 `resolveTaskDeletion` 在确认后原子保存实际会话、清除活动计时并修改 Task。
+- Snapshot 已提升至 v5；完成会话作为独立 `focus_session` 资源接入 WebDAV、DeadlinerServer 和 Backup，恢复备份会清除 local-only 活动计时。
+- 第二批通过 SQLDelight migration verification、macOS ARM64 全量测试、规格校验与 diff whitespace 检查。
+- 尚待平台批次：三端 bridge/UI、通知实现、生命周期接线、同进程 monotonic clock 和三端手工矩阵。

@@ -19,15 +19,16 @@ internal object LegacySnapshotV3Migrator {
         val payloadVersion = payload.intOrNull("formatVersion")
         val snapshot = payload["snapshot"] as? JsonObject
         if (snapshot == null) {
-            if (payloadVersion != LEGACY_FORMAT_VERSION) return null
+            if (payloadVersion == null || payloadVersion !in LEGACY_FORMAT_VERSIONS) return null
             return JsonObject(payload + ("formatVersion" to JsonPrimitive(CURRENT_FORMAT_VERSION))).toString()
         }
         val habits = snapshot["habits"] as? JsonArray ?: JsonArray(emptyList())
         val snapshotVersion = snapshot.intOrNull("format_version")
         val hasLegacyHabit = habits.any(::isLegacyHabitItem)
-        val isDeclaredV3 = payloadVersion == LEGACY_FORMAT_VERSION || snapshotVersion == LEGACY_FORMAT_VERSION
+        val isDeclaredLegacy = (payloadVersion != null && payloadVersion in LEGACY_FORMAT_VERSIONS) ||
+            (snapshotVersion != null && snapshotVersion in LEGACY_FORMAT_VERSIONS)
 
-        if (!hasLegacyHabit && !isDeclaredV3) return null
+        if (!hasLegacyHabit && !isDeclaredLegacy) return null
         require(payloadVersion == null || payloadVersion in SUPPORTED_INPUT_VERSIONS) {
             "Unsupported sync format $payloadVersion"
         }
@@ -39,6 +40,7 @@ internal object LegacySnapshotV3Migrator {
             snapshot + mapOf(
                 "format_version" to JsonPrimitive(CURRENT_FORMAT_VERSION),
                 "habits" to JsonArray(habits.map(::migrateHabitItem)),
+                "focus_sessions" to (snapshot["focus_sessions"] ?: JsonArray(emptyList())),
             ),
         )
         return JsonObject(
@@ -172,8 +174,8 @@ internal object LegacySnapshotV3Migrator {
         "totalTarget",
         "total_target",
     )
-    private val SUPPORTED_INPUT_VERSIONS = setOf(LEGACY_FORMAT_VERSION, CURRENT_FORMAT_VERSION)
-    private const val LEGACY_FORMAT_VERSION = 3
-    private const val CURRENT_FORMAT_VERSION = 4
+    private val LEGACY_FORMAT_VERSIONS = setOf(3, 4)
+    private val SUPPORTED_INPUT_VERSIONS = LEGACY_FORMAT_VERSIONS + CURRENT_FORMAT_VERSION
+    private const val CURRENT_FORMAT_VERSION = 5
     private const val FALLBACK_START_DATE = "1970-01-01"
 }

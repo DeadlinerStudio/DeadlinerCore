@@ -59,3 +59,12 @@
 - `viewmodel/focus/FocusTimerViewModel.kt`：纯计算秒级 tick、今日摘要、Task 今日/累计、最近会话、更正和删除。
 - `TaskRepository.kt`：提取事务内 Task action mutation；公开 active-timer 守门结果等待下一 breaking 批次。
 - 第一批未修改 Snapshot/WebDAV/Server/Backup 格式，也未接入 Android、iOS、HarmonyOS UI。
+
+## Core 第二批实际落点
+
+- `domain/focus/FocusTaskPolicy.kt` 与 `TaskRepository.kt`：在同一数据库事务内守住状态变更、软删除和计时启动之间的竞态。
+- `TaskListViewModel.kt`、`TaskDetailViewModel.kt`、`ArchiveViewModel.kt`：向平台暴露 `TIMER_REQUIRES_RESOLUTION`，拦截时不提前更新内存状态或通知。
+- `FocusTimerService.kt`、`FocusTimerViewModel.kt`：确认后原子保存会话并完成、放弃或删除绑定 Task。
+- Snapshot 根合同提升至 v5；完成会话进入 WebDAV snapshot、DeadlinerServer 独立实体和 Backup，活动计时始终 local-only。
+- 已覆盖 v4→v5 迁移、会话同步与 tombstone、Server 往返、备份恢复清除活动计时、Task 入口拦截和组合事务。
+- Android、iOS、HarmonyOS bridge 与 UI 仍在下一平台批次。

@@ -3,6 +3,7 @@ package com.deadliner.viewmodel.task
 import com.deadliner.db.repository.TaskRepository
 import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskAction
+import com.deadliner.domain.task.TaskActionOutcome
 import com.deadliner.domain.task.TaskSubtask
 import com.deadliner.platform.PlatformIdentity
 import com.deadliner.service.NotificationOrchestrator
@@ -84,9 +85,13 @@ class TaskDetailViewModel(
         scope.launch {
             try {
                 val result = taskRepository.applyAction(taskUid, action, Clock.System.now().toString())
-                result.task?.let { task ->
+                if (result.outcome == TaskActionOutcome.APPLIED) result.task?.let { task ->
                     notificationOrchestrator?.onTaskUpdated(task)
-                    _uiState.update { it.copy(task = task, error = null) }
+                    _uiState.update {
+                        it.copy(task = task, error = null, lastActionOutcome = result.outcome)
+                    }
+                } else {
+                    _uiState.update { it.copy(error = null, lastActionOutcome = result.outcome) }
                 }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = e.message) }
@@ -195,9 +200,15 @@ class TaskDetailViewModel(
     fun deleteTask() {
         scope.launch {
             try {
-                taskRepository.delete(taskUid, Clock.System.now().toString())
-                notificationOrchestrator?.onTaskDeleted(taskUid)
-                _uiState.update { it.copy(task = null, error = null) }
+                val result = taskRepository.delete(taskUid, Clock.System.now().toString())
+                if (result.outcome == TaskActionOutcome.APPLIED) {
+                    notificationOrchestrator?.onTaskDeleted(taskUid)
+                    _uiState.update {
+                        it.copy(task = null, error = null, lastActionOutcome = result.outcome)
+                    }
+                } else {
+                    _uiState.update { it.copy(error = null, lastActionOutcome = result.outcome) }
+                }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = e.message) }
             }
@@ -210,6 +221,7 @@ data class TaskDetailUiState(
     val task: Task? = null,
     val isLoading: Boolean = true,
     val error: String? = null,
+    val lastActionOutcome: TaskActionOutcome? = null,
 )
 
 // ===== 子任务配置对象 =====

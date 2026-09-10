@@ -1,6 +1,9 @@
 package com.deadliner.sync.snapshot
 
 import com.deadliner.domain.category.Category
+import com.deadliner.domain.focus.FocusCompletionKind
+import com.deadliner.domain.focus.FocusSession
+import com.deadliner.domain.focus.FocusTimerMode
 import com.deadliner.domain.habit.HabitGoalWindow
 import com.deadliner.domain.habit.HabitScheduleKind
 import com.deadliner.domain.habit.HabitTrackingMode
@@ -38,6 +41,24 @@ class SnapshotV3Test {
                     ver = SnapshotV3EntityVersion("2026-07-18T12:00:00Z", 3, "mac"),
                     deleted = false,
                     doc = Task(uid = "task.1", title = "Ship v3", createdAt = "created", updatedAt = "updated"),
+                ),
+            ),
+            focusSessions = listOf(
+                SnapshotV3FocusSessionItem(
+                    uid = "focus.1",
+                    ver = SnapshotV3EntityVersion("2026-07-18T12:20:00Z", 1, "mac"),
+                    deleted = false,
+                    doc = FocusSession(
+                        uid = "focus.1",
+                        taskUid = "task.1",
+                        taskTitleSnapshot = "Ship v3",
+                        mode = FocusTimerMode.STOPWATCH,
+                        startedAt = "2026-07-18T12:00:00Z",
+                        endedAt = "2026-07-18T12:20:00Z",
+                        durationSeconds = 1_200,
+                        completionKind = FocusCompletionKind.FOCUS_ONLY,
+                        createdAt = "2026-07-18T12:20:00Z",
+                    ),
                 ),
             ),
         )

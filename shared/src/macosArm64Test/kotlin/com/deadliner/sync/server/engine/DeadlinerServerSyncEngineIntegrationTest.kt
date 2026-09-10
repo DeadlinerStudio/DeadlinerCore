@@ -6,6 +6,8 @@ import com.deadliner.domain.account.UserProfile
 import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.capture.CaptureSource
 import com.deadliner.domain.category.Category
+import com.deadliner.domain.focus.FocusTimerCommand
+import com.deadliner.domain.focus.FocusTimerMode
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitPeriod
 import com.deadliner.domain.habit.HabitRecord
@@ -24,6 +26,7 @@ import com.deadliner.sync.server.model.ServerSyncPushResponse
 import com.deadliner.sync.server.model.ServerSyncServerVersion
 import com.deadliner.sync.server.transport.DeadlinerServerTransport
 import kotlinx.coroutines.runBlocking
+import kotlinx.datetime.Instant
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
@@ -213,6 +216,16 @@ class DeadlinerServerSyncEngineIntegrationTest {
                 createdAt = "2026-08-30T02:00:00Z",
                 updatedAt = "2026-08-30T02:00:00Z",
             ))
+            source.createFocusTimerService().also { timer ->
+                timer.execute(
+                    FocusTimerCommand.Start("task.complete-coverage", FocusTimerMode.STOPWATCH),
+                    Instant.parse("2026-08-30T02:10:00Z"),
+                )
+                timer.execute(
+                    FocusTimerCommand.Finish,
+                    Instant.parse("2026-08-30T02:20:00Z"),
+                )
+            }
             source.habits.create(Habit(
                 uid = "habit.coverage",
                 name = "每日复盘",
@@ -256,6 +269,7 @@ class DeadlinerServerSyncEngineIntegrationTest {
 
             assertEquals("项目", target.categories.find("category.custom")?.name)
             assertEquals("同步子任务", target.tasks.find("task.complete-coverage")?.subtasks?.single()?.content)
+            assertEquals(600, target.focusSessions.list().single().durationSeconds)
             assertEquals("每日复盘", target.habits.find("habit.coverage")?.name)
             assertEquals("record.coverage", target.habits.records("habit.coverage").single().uid)
             assertEquals("稍后整理", target.captures.find("capture.coverage")?.text)

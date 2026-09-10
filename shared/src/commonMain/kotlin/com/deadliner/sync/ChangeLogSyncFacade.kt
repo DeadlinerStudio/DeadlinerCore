@@ -61,12 +61,12 @@ class ChangeLogSyncFacade(
 
         return runCatching {
             val migrated = requireNotNull(LegacySnapshotV3Migrator.migrate(raw, json)) {
-                "Payload is neither current V4 nor a supported legacy V3 snapshot"
+                "Payload is neither current V5 nor a supported legacy V3/V4 snapshot"
             }
             json.decodeFromString<ChangeLogSyncPayload>(migrated).also(::requireCurrentFormat)
         }.getOrElse { migrationFailure ->
             throw IllegalArgumentException(
-                "${currentFailure.exceptionOrNull()?.message ?: "Current V4 decode failed"}; " +
+                "${currentFailure.exceptionOrNull()?.message ?: "Current V5 decode failed"}; " +
                     "legacy migration failed: ${migrationFailure.message ?: migrationFailure::class.simpleName}",
                 migrationFailure,
             )
@@ -99,7 +99,7 @@ class ChangeLogSyncFacade(
             "Unsupported snapshot format" in messages -> "unsupportedSnapshotFormat"
             "Unsupported legacy habit period" in messages -> "unsupportedLegacyHabitPeriod"
             "Unsupported legacy habit goal type" in messages -> "unsupportedLegacyHabitGoalType"
-            "Invalid v4 snapshot" in messages -> "snapshotValidation"
+            "Invalid v5 snapshot" in messages -> "snapshotValidation"
             "Unexpected JSON token" in messages -> "malformedJson"
             else -> "type=${error::class.simpleName ?: "UnknownPayloadFailure"}"
         }
@@ -128,7 +128,7 @@ data class ChangeLogSyncPayload(
     val changes: List<ChangeLogEntry> = emptyList(),
 ) {
     companion object {
-        const val FORMAT_VERSION = 4
+        const val FORMAT_VERSION = 5
     }
 }
 

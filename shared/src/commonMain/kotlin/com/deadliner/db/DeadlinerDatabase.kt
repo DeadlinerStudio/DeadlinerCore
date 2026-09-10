@@ -36,9 +36,15 @@ class DeadlinerDatabase private constructor(
     private val changeLogRepository = ChangeLogRepository(database)
     private val repositorySync = RepositorySyncCoordinator()
     private val widgetAwareRepositoryMutation = WidgetAwareRepositoryMutationNotifier(repositorySync)
+    private val activeFocusTimerStore = ActiveFocusTimerStore(database)
 
     val categories = CategoryRepository(database, changeLogRepository, mutationNotifier = widgetAwareRepositoryMutation)
-    val tasks = TaskRepository(database, changeLogRepository, mutationNotifier = widgetAwareRepositoryMutation)
+    val tasks = TaskRepository(
+        database,
+        changeLogRepository,
+        mutationNotifier = widgetAwareRepositoryMutation,
+        activeTimers = activeFocusTimerStore,
+    )
     val habits = HabitRepository(database, changeLogRepository, mutationNotifier = widgetAwareRepositoryMutation)
     val focusSessions = FocusSessionRepository(
         database,
@@ -64,7 +70,7 @@ class DeadlinerDatabase private constructor(
             database = database,
             tasks = tasks,
             sessions = focusSessions,
-            activeTimers = ActiveFocusTimerStore(database),
+            activeTimers = activeFocusTimerStore,
             alarmPort = alarmPort,
             mutationNotifier = widgetAwareRepositoryMutation,
         )

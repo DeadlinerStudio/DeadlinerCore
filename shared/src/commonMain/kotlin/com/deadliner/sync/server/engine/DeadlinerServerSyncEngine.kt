@@ -76,7 +76,7 @@ data class DeadlinerServerSyncOutcome(
 
 /**
  * Offline-first BYOS orchestration. Every pull page advances its cursor in the same SQLite
- * transaction as Snapshot V4 merge, and every push is backed by a durable outbox row.
+ * transaction as Snapshot V5 merge, and every push is backed by a durable outbox row.
  */
 class DeadlinerServerSyncEngine internal constructor(
     database: AppDatabase,

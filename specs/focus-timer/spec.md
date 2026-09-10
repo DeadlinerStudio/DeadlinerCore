@@ -12,10 +12,10 @@
 
 ## 实现状态
 
-- Core 第一批已完成领域合同、计时引擎、本地活动计时、完成会话、原子“结束并完成”、通知端口、轻量统计 query 与共享 ViewModel。
-- 已完成 common 领域测试、macOS SQLDelight 集成测试和 migration verification。
-- 当前仍是不可发布的 Core 增量：Task 其他状态入口拦截、Snapshot v5、WebDAV/Server/Backup、平台通知实现和三端 UI 尚未接入。
-- 进入上述 breaking 合同批次前，需先为包含现有 Widget 工作的完整工作区建立 Git 安全检查点。
+- Core 第二批已完成领域合同、计时引擎、本地活动计时、完成会话、Task 状态入口拦截、原子解决操作、通知端口、轻量统计 query 与共享 ViewModel。
+- 已完成 Snapshot v5、WebDAV/DeadlinerServer/Backup 合同，以及 common、macOS SQLDelight 集成测试和 migration verification。
+- 当前仍是不可发布的 Core 增量：平台通知实现、bridge 接线、单调时钟和三端 UI 尚未接入。
+- breaking 合同批次前已建立包含既有 Widget 工作与 Focus 第一批的全工作区安全提交 `1d7a095`。
 
 ## 目标
 
@@ -61,9 +61,9 @@
 ## 风险与约束
 
 - `focus_session` 是独立聚合，只引用 `taskUid`；Task 删除不级联历史，引用完整性由 repository 校验。
-- `TaskRepository.applyAction` 需要新增“存在活动计时时先解决”的结果，并迁移所有 Task 状态写入口。
+- `TaskRepository` 已返回“存在活动计时时先解决”的结果；平台 Task 状态入口仍需展示确认流程并调用组合解决命令。
 - 运行期间优先使用单调时钟；跨进程恢复使用 UTC 墙上时钟，需要处理时间回拨与前跳。
 - 后台通知不是完成记录的唯一事实来源；恢复时必须重新计算并幂等收敛。
-- Snapshot 合同需从 v4 升级，并为旧版本提供空 `focusSessions` 迁移路径。
-- 技术实现前须关闭 `trd.md` 第 20 节待技术决策。
-- Core 第一批不宣称三端可用；完整验收需等同步合同、Task 入口守门和三端展示接入完成。
+- Snapshot 合同已从 v4 升级为 v5，并为旧版本提供空 `focusSessions` 迁移路径。
+- `trd.md` 第 20 节技术决策已关闭并进入实现。
+- Core 第二批不宣称三端可用；完整验收需等 bridge、生命周期和三端展示接入完成。

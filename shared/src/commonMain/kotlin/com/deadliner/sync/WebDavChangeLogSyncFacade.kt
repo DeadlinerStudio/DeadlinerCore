@@ -195,6 +195,7 @@ data class WebDavChangeLogSyncOutcome(
 enum class SyncResourceKind {
     CATEGORY,
     TASK,
+    FOCUS_SESSION,
     HABIT,
     CAPTURE,
     MEMORY,

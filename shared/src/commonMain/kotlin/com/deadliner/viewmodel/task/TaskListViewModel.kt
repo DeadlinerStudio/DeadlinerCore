@@ -3,6 +3,7 @@ package com.deadliner.viewmodel.task
 import com.deadliner.db.repository.TaskRepository
 import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskAction
+import com.deadliner.domain.task.TaskActionOutcome
 import com.deadliner.domain.task.TaskState
 import com.deadliner.platform.PlatformIdentity
 import com.deadliner.service.NotificationOrchestrator
@@ -73,28 +74,33 @@ class TaskListViewModel(
         if (taskRepository.find(task.uid) == null) {
             taskRepository.create(task)
             notificationOrchestrator?.onTaskCreated(task)
+            loadNow().withActionOutcome(TaskActionOutcome.APPLIED)
         } else {
-            taskRepository.update(task)
-            notificationOrchestrator?.onTaskUpdated(task)
+            val result = taskRepository.update(task)
+            if (result.outcome == TaskActionOutcome.APPLIED) {
+                notificationOrchestrator?.onTaskUpdated(task)
+            }
+            loadNow().withActionOutcome(result.outcome)
         }
-        loadNow()
+        _uiState.value
     } catch (error: Exception) {
         _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
     }
 
     fun applyTaskActionNow(uid: String, action: TaskAction, occurredAt: String): TaskListUiState = try {
-        taskRepository.applyAction(uid, action, occurredAt).task?.let { task ->
-            notificationOrchestrator?.onTaskUpdated(task)
+        val result = taskRepository.applyAction(uid, action, occurredAt)
+        if (result.outcome == TaskActionOutcome.APPLIED) {
+            result.task?.let { notificationOrchestrator?.onTaskUpdated(it) }
         }
-        loadNow()
+        loadNow().withActionOutcome(result.outcome)
     } catch (error: Exception) {
         _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
     }
 
     fun deleteTaskNow(uid: String, updatedAt: String): TaskListUiState = try {
-        taskRepository.delete(uid, updatedAt)
-        notificationOrchestrator?.onTaskDeleted(uid)
-        loadNow()
+        val result = taskRepository.delete(uid, updatedAt)
+        if (result.outcome == TaskActionOutcome.APPLIED) notificationOrchestrator?.onTaskDeleted(uid)
+        loadNow().withActionOutcome(result.outcome)
     } catch (error: Exception) {
         _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
     }
@@ -138,15 +144,18 @@ class TaskListViewModel(
         scope.launch {
             try {
                 val result = taskRepository.applyAction(uid, TaskAction.MARK_COMPLETE, Clock.System.now().toString())
-                result.task?.let { task ->
+                if (result.outcome == TaskActionOutcome.APPLIED) result.task?.let { task ->
                     notificationOrchestrator?.onTaskUpdated(task)
                     // 直接更新内存缓存中的特定任务
                     _uiState.update { state ->
                         state.copy(
                             tasks = state.tasks.map { if (it.uid == uid) task else it },
                             error = null,
+                            lastActionOutcome = result.outcome,
                         )
                     }
+                } else {
+                    _uiState.update { it.copy(lastActionOutcome = result.outcome, error = null) }
                 }
             } catch (e: Exception) {
                 _uiState.update {
@@ -159,14 +168,18 @@ class TaskListViewModel(
     fun deleteTask(uid: String) {
         scope.launch {
             try {
-                taskRepository.delete(uid, Clock.System.now().toString())
-                notificationOrchestrator?.onTaskDeleted(uid)
-                // 从内存缓存中移除
-                _uiState.update { state ->
-                    state.copy(
-                        tasks = state.tasks.filter { it.uid != uid },
-                        error = null,
-                    )
+                val result = taskRepository.delete(uid, Clock.System.now().toString())
+                if (result.outcome == TaskActionOutcome.APPLIED) {
+                    notificationOrchestrator?.onTaskDeleted(uid)
+                    _uiState.update { state ->
+                        state.copy(
+                            tasks = state.tasks.filter { it.uid != uid },
+                            error = null,
+                            lastActionOutcome = result.outcome,
+                        )
+                    }
+                } else {
+                    _uiState.update { it.copy(lastActionOutcome = result.outcome, error = null) }
                 }
             } catch (e: Exception) {
                 _uiState.update {
@@ -209,6 +222,9 @@ class TaskListViewModel(
     }
 
     private fun TaskState.isActionable(): Boolean = this == TaskState.ACTIVE
+
+    private fun TaskListUiState.withActionOutcome(outcome: TaskActionOutcome): TaskListUiState =
+        copy(lastActionOutcome = outcome).also { _uiState.value = it }
 }
 
 // ===== UiState 定义（使用数据类，易于扩展）=====
@@ -216,6 +232,7 @@ data class TaskListUiState(
     val tasks: List<Task> = emptyList(),
     val isLoading: Boolean = true,
     val error: String? = null,
+    val lastActionOutcome: TaskActionOutcome? = null,
     val filter: TaskFilter = TaskFilter.ALL,
     val sortBy: TaskSortBy = TaskSortBy.DUE_DATE,
 )

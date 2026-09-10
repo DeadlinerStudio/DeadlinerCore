@@ -9,7 +9,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-/** Complete V3 backup owned by the shared persistence layer. */
+/** Complete Snapshot V5 backup owned by the shared persistence layer. */
 class BackupService internal constructor(private val database: AppDatabase) {
     private val snapshots = SnapshotV3Store(database)
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = false }
@@ -28,11 +28,12 @@ class BackupService internal constructor(private val database: AppDatabase) {
     fun restore(raw: String) {
         val backup = json.decodeFromString<BackupRoot>(raw)
         require(backup.formatVersion == BackupRoot.FORMAT_VERSION) { "Unsupported backup format" }
-        SnapshotV3Validator.requireValid(backup.snapshot)
+        val snapshot = backup.snapshot.upgradeV4()
+        SnapshotV3Validator.requireValid(snapshot)
         require(backup.conversationTurns.all { it.role.isNotBlank() && it.createdAt.isNotBlank() }) {
             "Invalid conversation history"
         }
-        snapshots.replace(backup.snapshot) {
+        snapshots.replace(snapshot) {
             database.conversationTurnQueries.deleteAll()
             backup.conversationTurns.forEach { turn ->
                 database.conversationTurnQueries.insertTurn(turn.role, turn.content, turn.createdAt)
@@ -42,6 +43,12 @@ class BackupService internal constructor(private val database: AppDatabase) {
 
     private companion object {
         const val MAX_CONVERSATION_TURNS = 500L
+    }
+
+    private fun SnapshotV3Root.upgradeV4(): SnapshotV3Root = when (formatVersion) {
+        SnapshotV3Root.FORMAT_VERSION -> this
+        4 -> copy(formatVersion = SnapshotV3Root.FORMAT_VERSION, focusSessions = emptyList())
+        else -> this
     }
 }
 

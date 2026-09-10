@@ -11,6 +11,9 @@ import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.capture.CaptureSource
 import com.deadliner.domain.category.Category
 import com.deadliner.domain.category.CategoryMutation
+import com.deadliner.domain.focus.FocusCompletionKind
+import com.deadliner.domain.focus.FocusSession
+import com.deadliner.domain.focus.FocusTimerMode
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitRecord
 import com.deadliner.domain.habit.HabitRecordStatus
@@ -53,6 +56,19 @@ class SnapshotV3Store(
                     ).flatten().maxOrNull() ?: value.updatedAt
                     SnapshotV3TaskItem(value.uid, versionFor(TASK, value.uid, aggregateUpdatedAt), value.isDeleted, document.takeUnless(Task::isDeleted))
                 }, TASK, { it.uid }, { uid, version -> SnapshotV3TaskItem(uid, version, true) },
+            ),
+            focusSessions = withStoredTombstones(
+                database.focusSessionQueries.selectAllIncludingDeleted(::focusSession).executeAsList().map { value ->
+                    SnapshotV3FocusSessionItem(
+                        value.uid,
+                        versionFor(FOCUS_SESSION, value.uid, value.updatedAt),
+                        value.isDeleted,
+                        value.takeUnless(FocusSession::isDeleted),
+                    )
+                },
+                FOCUS_SESSION,
+                { it.uid },
+                { uid, version -> SnapshotV3FocusSessionItem(uid, version, true) },
             ),
             habits = withStoredTombstones(
                 database.habitQueries.selectAllIncludingDeleted(::habitFromSql).executeAsList().map { value ->
@@ -105,6 +121,7 @@ class SnapshotV3Store(
         database.transaction {
             remote.categories.forEach { item -> applyOrIgnore(CATEGORY, item.uid, item.ver, { applyCategory(item) }, { applied++; appliedResources += SyncResourceKind.CATEGORY }, { ignored++ }) }
             remote.tasks.forEach { item -> applyOrIgnore(TASK, item.uid, item.ver, { applyTask(item) }, { applied++; appliedResources += SyncResourceKind.TASK }, { ignored++ }) }
+            remote.focusSessions.forEach { item -> applyOrIgnore(FOCUS_SESSION, item.uid, item.ver, { applyFocusSession(item) }, { applied++; appliedResources += SyncResourceKind.FOCUS_SESSION }, { ignored++ }) }
             remote.habits.forEach { item -> applyOrIgnore(HABIT, item.uid, item.ver, { applyHabit(item) }, { applied++; appliedResources += SyncResourceKind.HABIT }, { ignored++ }) }
             remote.captures.forEach { item -> applyOrIgnore(CAPTURE, item.uid, item.ver, { applyCapture(item) }, { applied++; appliedResources += SyncResourceKind.CAPTURE }, { ignored++ }) }
             remote.memoryFragments.forEach { item -> applyOrIgnore(MEMORY, item.uid, item.ver, { applyMemory(item) }, { applied++; appliedResources += SyncResourceKind.MEMORY }, { ignored++ }) }
@@ -122,6 +139,8 @@ class SnapshotV3Store(
         database.transaction {
             database.taskSubtaskQueries.deleteAll()
             database.habitRecordQueries.deleteAll()
+            database.activeFocusTimerQueries.deleteActive()
+            database.focusSessionQueries.deleteAll()
             database.taskQueries.deleteAll()
             database.habitQueries.deleteAll()
             database.categoryQueries.deleteAll()
@@ -137,6 +156,7 @@ class SnapshotV3Store(
 
             snapshot.categories.forEach { item -> applyOrIgnore(CATEGORY, item.uid, item.ver, { applyCategory(item) }, {}, {}) }
             snapshot.tasks.forEach { item -> applyOrIgnore(TASK, item.uid, item.ver, { applyTask(item) }, {}, {}) }
+            snapshot.focusSessions.forEach { item -> applyOrIgnore(FOCUS_SESSION, item.uid, item.ver, { applyFocusSession(item) }, {}, {}) }
             snapshot.habits.forEach { item -> applyOrIgnore(HABIT, item.uid, item.ver, { applyHabit(item) }, {}, {}) }
             snapshot.captures.forEach { item -> applyOrIgnore(CAPTURE, item.uid, item.ver, { applyCapture(item) }, {}, {}) }
             snapshot.memoryFragments.forEach { item -> applyOrIgnore(MEMORY, item.uid, item.ver, { applyMemory(item) }, {}, {}) }
@@ -177,6 +197,42 @@ class SnapshotV3Store(
                 .filter { !it.isDeleted && it.uid !in incomingSubtaskUids }
                 .forEach { database.taskSubtaskQueries.softDeleteSubtask(item.ver.ts, it.uid) }
             value.subtasks.forEach(::saveSubtask)
+        }
+    }
+
+    private fun applyFocusSession(item: SnapshotV3FocusSessionItem) {
+        if (item.deleted) {
+            database.focusSessionQueries.softDeleteSession(item.ver.ts, item.uid)
+            return
+        }
+        item.doc?.let { value ->
+            database.focusSessionQueries.insertSession(
+                value.uid,
+                value.taskUid,
+                value.taskTitleSnapshot,
+                value.mode.name,
+                value.plannedDurationSeconds,
+                value.startedAt,
+                value.endedAt,
+                value.durationSeconds,
+                value.completionKind.name,
+                value.createdAt,
+                value.updatedAt,
+                0,
+            )
+            database.focusSessionQueries.updateSession(
+                value.taskUid,
+                value.taskTitleSnapshot,
+                value.mode.name,
+                value.plannedDurationSeconds,
+                value.startedAt,
+                value.endedAt,
+                value.durationSeconds,
+                value.completionKind.name,
+                value.updatedAt,
+                0,
+                value.uid,
+            )
         }
     }
 
@@ -282,10 +338,11 @@ class SnapshotV3Store(
     private fun capture(uid: String, text: String, source: String, createdAt: String, updatedAt: String, isConsumed: Long, isDeleted: Long) = CaptureItem(uid, text, CaptureSource.valueOf(source), createdAt, updatedAt, isConsumed.asBoolean(), isDeleted.asBoolean())
     private fun memory(uid: String, content: String, category: String, createdAt: String, importance: Long, updatedAt: String, isDeleted: Long) = MemoryFragment(uid, content, category, createdAt, importance.toInt(), updatedAt, isDeleted.asBoolean())
     private fun profile(uid: String, nickname: String, avatarFileName: String?, tier: String, createdAt: String, updatedAt: String, isDeleted: Long) = UserProfile(uid, nickname, avatarFileName, UserTier.valueOf(tier), createdAt, updatedAt, isDeleted.asBoolean())
+    private fun focusSession(uid: String, taskUid: String, taskTitleSnapshot: String, mode: String, plannedDurationSeconds: Long?, startedAt: String, endedAt: String, durationSeconds: Long, completionKind: String, createdAt: String, updatedAt: String, isDeleted: Long) = FocusSession(uid, taskUid, taskTitleSnapshot, FocusTimerMode.valueOf(mode), plannedDurationSeconds, startedAt, endedAt, durationSeconds, FocusCompletionKind.valueOf(completionKind), createdAt, updatedAt, isDeleted.asBoolean())
     private fun String.toTaskState() = when (this) { "active" -> TaskState.ACTIVE; "completed" -> TaskState.COMPLETED; "archived" -> TaskState.ARCHIVED; "abandoned" -> TaskState.ABANDONED; "abandonedArchived" -> TaskState.ABANDONED_ARCHIVED; else -> error("Unknown persisted TaskState: $this") }
 
     private companion object {
-        const val CATEGORY = "category"; const val TASK = "task"; const val HABIT = "habit"; const val CAPTURE = "capture_item"; const val MEMORY = "memory_fragment"; const val MEMORY_PROFILE = "memory_user_profile"; const val MEMORY_PROFILE_UID = "singleton"; const val PROFILE = "user_profile"
+        const val CATEGORY = "category"; const val TASK = "task"; const val FOCUS_SESSION = "focus_session"; const val HABIT = "habit"; const val CAPTURE = "capture_item"; const val MEMORY = "memory_fragment"; const val MEMORY_PROFILE = "memory_user_profile"; const val MEMORY_PROFILE_UID = "singleton"; const val PROFILE = "user_profile"
     }
 }
 

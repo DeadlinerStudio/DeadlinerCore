@@ -19,6 +19,7 @@ enum class FocusTimerState {
 enum class FocusCompletionKind {
     FOCUS_ONLY,
     FOCUS_AND_TASK_COMPLETED,
+    FOCUS_AND_TASK_CHANGED,
     COUNTDOWN_ELAPSED,
     TASK_BECAME_INACTIVE,
 }

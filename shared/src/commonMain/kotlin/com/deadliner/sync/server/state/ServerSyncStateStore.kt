@@ -25,7 +25,7 @@ internal data class ServerSyncPendingMutation(
 )
 
 /**
- * Durable, provider/account-scoped metadata. Business documents remain owned by Snapshot V4;
+ * Durable, provider/account-scoped metadata. Business documents remain owned by Snapshot V5;
  * this store persists only replay state and never stores credentials.
  */
 internal class ServerSyncStateStore(
