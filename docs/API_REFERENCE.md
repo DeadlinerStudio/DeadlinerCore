@@ -24,7 +24,7 @@ try {
 }
 ```
 
-`DeadlinerDatabase` exposes `categories`, `tasks`, `habits`, and `changeLog`. Business writes from the three repositories append a changelog record within the same SQL transaction.
+`DeadlinerDatabase` exposes `categories`, `tasks`, `habits`, `focusSessions`, and `changeLog`. Business writes append a changelog record within the same SQL transaction. Focus sessions are available in the local Core API, but are not part of the current Snapshot v4 network/backup contract yet.
 
 ## Core build version
 
@@ -70,6 +70,42 @@ core.tasks.create(task: Task)
 core.tasks.update(task: Task)
 core.tasks.delete(uid: String, updatedAt: String) // tombstones task and live subtasks
 ```
+
+### Task focus timer (Core preview)
+
+- `FocusTimerMode`: `STOPWATCH` or `COUNTDOWN` (1–180 minutes).
+- `FocusTimerCommand`: `Start`, `Pause`, `Resume`, `Finish`, `FinishAndCompleteTask`, `Discard`, and `Reconcile`.
+- `FocusTimerSnapshot` is the client display contract. Clients render its elapsed/remaining values and capability flags rather than recreating timer rules.
+- `FocusSession` is a completed, editable history row; `ActiveFocusTimer` is a device-local singleton and is never a cross-device resource.
+
+Create one service for the app/database lifetime and inject a platform alarm adapter when countdown notifications are available:
+
+```kotlin
+val timer = core.createFocusTimerService(focusAlarmPort)
+timer.execute(FocusTimerCommand.Start(taskUid, FocusTimerMode.COUNTDOWN, 25 * 60))
+timer.execute(FocusTimerCommand.Pause)
+timer.execute(FocusTimerCommand.Resume)
+timer.execute(FocusTimerCommand.Finish)
+timer.execute(FocusTimerCommand.FinishAndCompleteTask)
+timer.execute(FocusTimerCommand.Discard)
+timer.execute(FocusTimerCommand.Reconcile) // app start/foreground/notification callback
+```
+
+`FinishAndCompleteTask` writes the completed session, clears the local active timer, and marks the bound Task `COMPLETED` in one database transaction. A countdown reaching zero records its planned duration and leaves the Task active.
+
+Completed-session queries and edits:
+
+```kotlin
+core.focusSessions.recent(limit)
+core.focusSessions.recentForTask(taskUid, limit)
+core.focusSessions.totalForTask(taskUid)
+core.focusSessions.totalStartedInRange(startInclusive, endExclusive)
+core.focusSessions.totalForTaskStartedInRange(taskUid, startInclusive, endExclusive)
+core.focusSessions.adjustDuration(sessionUid, lowerDurationSeconds, updatedAt)
+core.focusSessions.delete(sessionUid, updatedAt)
+```
+
+`FocusTimerViewModel` exposes the active timer, today duration/session count, selected Task today/all-time duration, recent sessions, and session adjustment/deletion. Call `tick()` once per visible second; it recalculates display state from in-memory anchors and does not persist per-second updates. Platform bridge helpers and Snapshot/Server/Backup support are pending the next contract batch.
 
 ### Habits
 

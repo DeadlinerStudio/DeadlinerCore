@@ -8,9 +8,12 @@ import com.deadliner.db.repository.HabitRepository
 import com.deadliner.db.repository.MemoryRepository
 import com.deadliner.db.repository.TaskRepository
 import com.deadliner.db.repository.UserProfileRepository
+import com.deadliner.db.repository.focus.ActiveFocusTimerStore
+import com.deadliner.db.repository.focus.FocusSessionRepository
 import com.deadliner.sync.ChangeLogSyncFacade
 import com.deadliner.sync.LegacyV2SyncFacade
 import com.deadliner.sync.RepositorySyncCoordinator
+import com.deadliner.sync.WidgetAwareRepositoryMutationNotifier
 import com.deadliner.sync.WebDavChangeLogSyncFacade
 import com.deadliner.sync.WebDavChangeLogSyncOutcome
 import com.deadliner.sync.WebDavV2SyncFacade
@@ -20,8 +23,10 @@ import com.deadliner.sync.server.engine.DeadlinerServerSyncConfiguration
 import com.deadliner.sync.server.engine.DeadlinerServerSyncEngine
 import com.deadliner.sync.server.transport.DeadlinerServerTransport
 import com.deadliner.platform.NotificationService
+import com.deadliner.platform.FocusAlarmPort
 import com.deadliner.service.NotificationOrchestrator
 import com.deadliner.service.BackupService
+import com.deadliner.service.focus.FocusTimerService
 
 /** Single lifecycle entry point for the NEW ERA preview database. */
 class DeadlinerDatabase private constructor(
@@ -30,10 +35,16 @@ class DeadlinerDatabase private constructor(
 ) : AutoCloseable {
     private val changeLogRepository = ChangeLogRepository(database)
     private val repositorySync = RepositorySyncCoordinator()
+    private val widgetAwareRepositoryMutation = WidgetAwareRepositoryMutationNotifier(repositorySync)
 
-    val categories = CategoryRepository(database, changeLogRepository, mutationNotifier = repositorySync)
-    val tasks = TaskRepository(database, changeLogRepository, mutationNotifier = repositorySync)
-    val habits = HabitRepository(database, changeLogRepository, mutationNotifier = repositorySync)
+    val categories = CategoryRepository(database, changeLogRepository, mutationNotifier = widgetAwareRepositoryMutation)
+    val tasks = TaskRepository(database, changeLogRepository, mutationNotifier = widgetAwareRepositoryMutation)
+    val habits = HabitRepository(database, changeLogRepository, mutationNotifier = widgetAwareRepositoryMutation)
+    val focusSessions = FocusSessionRepository(
+        database,
+        changeLogRepository,
+        mutationNotifier = widgetAwareRepositoryMutation,
+    )
     val captures = CaptureRepository(database, changeLogRepository, mutationNotifier = repositorySync)
     val memory = MemoryRepository(database, changeLogRepository, mutationNotifier = repositorySync)
     val profiles = UserProfileRepository(database, changeLogRepository, mutationNotifier = repositorySync)
@@ -47,6 +58,16 @@ class DeadlinerDatabase private constructor(
 
     fun createNotificationOrchestrator(notificationService: NotificationService): NotificationOrchestrator =
         NotificationOrchestrator(notificationService)
+
+    fun createFocusTimerService(alarmPort: FocusAlarmPort = FocusAlarmPort.NONE): FocusTimerService =
+        FocusTimerService(
+            database = database,
+            tasks = tasks,
+            sessions = focusSessions,
+            activeTimers = ActiveFocusTimerStore(database),
+            alarmPort = alarmPort,
+            mutationNotifier = widgetAwareRepositoryMutation,
+        )
 
     /** Creates one offline-first BYOS engine for a stable server/account scope. */
     fun createDeadlinerServerSyncEngine(

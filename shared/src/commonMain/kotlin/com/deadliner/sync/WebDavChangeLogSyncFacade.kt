@@ -1,6 +1,8 @@
 package com.deadliner.sync
 
 import com.deadliner.platform.PlatformLogger
+import com.deadliner.platform.WidgetUpdateReason
+import com.deadliner.platform.updateWidget
 import com.deadliner.sync.transport.SyncBlob
 import com.deadliner.sync.transport.SyncBlobTransport
 import com.deadliner.sync.transport.SyncTransportPreconditionFailedException
@@ -132,6 +134,7 @@ class WebDavChangeLogSyncFacade(
                 "sync.webdav",
                 "sync.succeeded remoteApplied=" + it.remoteApplied + " remoteIgnored=" + it.remoteIgnored,
             )
+            updateWidget(WidgetUpdateReason.USER_REFRESH)
             WebDavChangeLogSyncOutcome(
                 succeeded = true,
                 remoteApplied = it.remoteApplied,

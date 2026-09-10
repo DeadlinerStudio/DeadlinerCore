@@ -2,6 +2,8 @@ package com.deadliner.bridge
 
 import com.deadliner.db.repository.TaskRepository
 import com.deadliner.service.NotificationOrchestrator
+import com.deadliner.platform.WidgetUpdateReason
+import com.deadliner.platform.updateWidget
 import com.deadliner.viewmodel.task.TaskListUiState
 import com.deadliner.viewmodel.task.TaskListViewModel
 import kotlinx.coroutines.CoroutineScope
@@ -48,6 +50,7 @@ class IosTaskListStateBridge(
     /** Re-reads the repository after a write performed outside this ViewModel. */
     fun refresh() {
         viewModel.initialize()
+        updateWidget(WidgetUpdateReason.USER_REFRESH)
     }
 
     override fun close() {

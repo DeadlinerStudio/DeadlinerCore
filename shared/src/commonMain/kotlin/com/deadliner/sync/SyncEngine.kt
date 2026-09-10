@@ -5,6 +5,8 @@ import com.deadliner.model.ChangeLogEntry
 import com.deadliner.sync.protocol.ChangeAcknowledgement
 import com.deadliner.sync.protocol.RemoteChangeApplier
 import com.deadliner.sync.protocol.SyncTransport
+import com.deadliner.platform.WidgetUpdateReason
+import com.deadliner.platform.updateWidget
 
 /** Coordinates changelog exchange without importing or querying a business table. */
 class SyncEngine(
@@ -26,7 +28,9 @@ class SyncEngine(
         remoteChanges.forEach { incoming ->
             if (applyRemoteChange(incoming)) applied++ else ignored++
         }
-        return SyncReport(pending.size, pushResult.acknowledgements.size, applied, ignored)
+        return SyncReport(pending.size, pushResult.acknowledgements.size, applied, ignored).also {
+            updateWidget(WidgetUpdateReason.USER_REFRESH)
+        }
     }
 
     fun applyRemoteChange(incoming: ChangeLogEntry): Boolean {

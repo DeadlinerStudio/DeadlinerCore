@@ -2,6 +2,8 @@ package com.deadliner.bridge
 
 import com.deadliner.db.repository.HabitRepository
 import com.deadliner.service.NotificationOrchestrator
+import com.deadliner.platform.WidgetUpdateReason
+import com.deadliner.platform.updateWidget
 import com.deadliner.viewmodel.habit.HabitListUiState
 import com.deadliner.viewmodel.habit.HabitListViewModel
 import kotlinx.coroutines.CoroutineScope
@@ -44,6 +46,7 @@ class IosHabitListStateBridge(
 
     fun refresh() {
         viewModel.initialize()
+        updateWidget(WidgetUpdateReason.USER_REFRESH)
     }
 
     fun selectDate(rawDate: String) {

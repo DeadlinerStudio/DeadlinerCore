@@ -1,0 +1,83 @@
+selectAll:
+SELECT uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
+       duration_seconds, completion_kind, created_at, updated_at, is_deleted
+FROM focus_session
+WHERE is_deleted = 0
+ORDER BY started_at DESC, created_at DESC;
+
+selectAllIncludingDeleted:
+SELECT uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
+       duration_seconds, completion_kind, created_at, updated_at, is_deleted
+FROM focus_session
+ORDER BY started_at DESC, created_at DESC;
+
+selectByUid:
+SELECT uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
+       duration_seconds, completion_kind, created_at, updated_at, is_deleted
+FROM focus_session
+WHERE uid = ?;
+
+selectForTask:
+SELECT uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
+       duration_seconds, completion_kind, created_at, updated_at, is_deleted
+FROM focus_session
+WHERE task_uid = ? AND is_deleted = 0
+ORDER BY started_at DESC, created_at DESC;
+
+selectRecentForTask:
+SELECT uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
+       duration_seconds, completion_kind, created_at, updated_at, is_deleted
+FROM focus_session
+WHERE task_uid = :task_uid AND is_deleted = 0
+ORDER BY started_at DESC, created_at DESC
+LIMIT :limit;
+
+selectRecent:
+SELECT uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
+       duration_seconds, completion_kind, created_at, updated_at, is_deleted
+FROM focus_session
+WHERE is_deleted = 0
+ORDER BY started_at DESC, created_at DESC
+LIMIT :limit;
+
+sumDurationForTask:
+SELECT COALESCE(SUM(duration_seconds), 0)
+FROM focus_session
+WHERE task_uid = ? AND is_deleted = 0;
+
+sumDurationStartedInRange:
+SELECT COALESCE(SUM(duration_seconds), 0)
+FROM focus_session
+WHERE is_deleted = 0 AND started_at >= :start_inclusive AND started_at < :end_exclusive;
+
+countStartedInRange:
+SELECT COUNT(*)
+FROM focus_session
+WHERE is_deleted = 0 AND started_at >= :start_inclusive AND started_at < :end_exclusive;
+
+sumDurationForTaskStartedInRange:
+SELECT COALESCE(SUM(duration_seconds), 0)
+FROM focus_session
+WHERE task_uid = :task_uid
+  AND is_deleted = 0
+  AND started_at >= :start_inclusive
+  AND started_at < :end_exclusive;
+
+insertSession:
+INSERT OR IGNORE INTO focus_session (
+    uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
+    duration_seconds, completion_kind, created_at, updated_at, is_deleted
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateSession:
+UPDATE focus_session
+SET task_uid = ?, task_title_snapshot = ?, mode = ?, planned_duration_seconds = ?, started_at = ?,
+    ended_at = ?, duration_seconds = ?, completion_kind = ?, updated_at = ?, is_deleted = ?
+WHERE uid = ?;
+
+softDeleteSession:
+UPDATE focus_session SET is_deleted = 1, updated_at = ? WHERE uid = ?;
+
+deleteAll:
+DELETE FROM focus_session;

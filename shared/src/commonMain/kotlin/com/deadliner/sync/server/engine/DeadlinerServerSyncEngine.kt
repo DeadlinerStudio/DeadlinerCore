@@ -13,6 +13,8 @@ import com.deadliner.sync.server.transport.DeadlinerServerTransport
 import com.deadliner.sync.snapshot.SnapshotV3Store
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import com.deadliner.platform.WidgetUpdateReason
+import com.deadliner.platform.updateWidget
 import kotlinx.serialization.json.Json
 import kotlin.random.Random
 
@@ -112,7 +114,7 @@ class DeadlinerServerSyncEngine internal constructor(
             }
         }
         totals.finish(reconcile())
-    }
+    }.also { updateWidget(WidgetUpdateReason.USER_REFRESH) }
 
     override fun close() {
         transport.close()

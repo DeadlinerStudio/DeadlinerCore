@@ -1,0 +1,15 @@
+selectActive:
+SELECT session_uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, state, started_at,
+       running_segment_started_at, accumulated_seconds, updated_at
+FROM active_focus_timer
+WHERE singleton_id = 1;
+
+upsertActive:
+INSERT OR REPLACE INTO active_focus_timer (
+    singleton_id, session_uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, state,
+    started_at, running_segment_started_at, accumulated_seconds, updated_at
+)
+VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteActive:
+DELETE FROM active_focus_timer WHERE singleton_id = 1;

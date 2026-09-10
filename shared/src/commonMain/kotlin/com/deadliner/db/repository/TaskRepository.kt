@@ -29,6 +29,17 @@ class TaskRepository(
 
     /** KMP is the sole authority for persisted task-state transitions. */
     fun applyAction(uid: String, action: TaskAction, occurredAt: String): TaskActionResult {
+        var result: TaskActionResult? = null
+        database.transaction {
+            result = applyActionInTransaction(uid, action, occurredAt)
+        }
+        return requireNotNull(result).also {
+            if (it.outcome == TaskActionOutcome.APPLIED) mutationNotifier.notifyMutation()
+        }
+    }
+
+    /** Reuses the Task state machine inside a larger business transaction without notifying early. */
+    internal fun applyActionInTransaction(uid: String, action: TaskAction, occurredAt: String): TaskActionResult {
         val existing = find(uid) ?: return TaskActionResult(null, TaskActionOutcome.NOT_FOUND)
         val target = TaskStateMachine.apply(existing.state, action)
         if (target == null) {
@@ -42,7 +53,7 @@ class TaskRepository(
             completedAt = completedAtAfter(existing, target, occurredAt),
             updatedAt = occurredAt,
         )
-        save(updated, ChangeOperation.UPDATE)
+        saveInTransaction(updated, ChangeOperation.UPDATE)
         return TaskActionResult(updated, TaskActionOutcome.APPLIED)
     }
 
@@ -62,31 +73,35 @@ class TaskRepository(
 
     private fun save(task: Task, operation: ChangeOperation) {
         database.transaction {
-            database.ensureCategoryReference(task.categoryUid, task.updatedAt)
-            database.taskQueries.insertTask(
-                task.uid, task.title, task.note, task.startAt, task.dueAt, task.state.persistedValue(),
-                task.completedAt, task.categoryUid, task.isStarred.asLong(), task.calendarEventId,
-                task.createdAt, task.updatedAt, task.isDeleted.asLong(),
-            )
-            database.taskQueries.updateTask(
-                task.title, task.note, task.startAt, task.dueAt, task.state.persistedValue(), task.completedAt,
-                task.categoryUid, task.isStarred.asLong(), task.calendarEventId, task.updatedAt,
-                task.isDeleted.asLong(), task.uid,
-            )
-            task.subtasks.forEach { subtask ->
-                database.taskSubtaskQueries.insertSubtask(
-                    subtask.uid, subtask.taskUid, subtask.content, subtask.isCompleted.asLong(),
-                    subtask.sortOrder.toLong(), subtask.createdAt, subtask.updatedAt, subtask.isDeleted.asLong(),
-                )
-                database.taskSubtaskQueries.updateSubtask(
-                    subtask.taskUid, subtask.content, subtask.isCompleted.asLong(), subtask.sortOrder.toLong(),
-                    subtask.updatedAt, subtask.isDeleted.asLong(), subtask.uid,
-                )
-                changeLog.appendLocal("task_subtask", subtask.uid, operation, json.encodeToJsonElement(subtask).jsonObject)
-            }
-            changeLog.appendLocal("task", task.uid, operation, json.encodeToJsonElement(task).jsonObject)
+            saveInTransaction(task, operation)
         }
         mutationNotifier.notifyMutation()
+    }
+
+    private fun saveInTransaction(task: Task, operation: ChangeOperation) {
+        database.ensureCategoryReference(task.categoryUid, task.updatedAt)
+        database.taskQueries.insertTask(
+            task.uid, task.title, task.note, task.startAt, task.dueAt, task.state.persistedValue(),
+            task.completedAt, task.categoryUid, task.isStarred.asLong(), task.calendarEventId,
+            task.createdAt, task.updatedAt, task.isDeleted.asLong(),
+        )
+        database.taskQueries.updateTask(
+            task.title, task.note, task.startAt, task.dueAt, task.state.persistedValue(), task.completedAt,
+            task.categoryUid, task.isStarred.asLong(), task.calendarEventId, task.updatedAt,
+            task.isDeleted.asLong(), task.uid,
+        )
+        task.subtasks.forEach { subtask ->
+            database.taskSubtaskQueries.insertSubtask(
+                subtask.uid, subtask.taskUid, subtask.content, subtask.isCompleted.asLong(),
+                subtask.sortOrder.toLong(), subtask.createdAt, subtask.updatedAt, subtask.isDeleted.asLong(),
+            )
+            database.taskSubtaskQueries.updateSubtask(
+                subtask.taskUid, subtask.content, subtask.isCompleted.asLong(), subtask.sortOrder.toLong(),
+                subtask.updatedAt, subtask.isDeleted.asLong(), subtask.uid,
+            )
+            changeLog.appendLocal("task_subtask", subtask.uid, operation, json.encodeToJsonElement(subtask).jsonObject)
+        }
+        changeLog.appendLocal("task", task.uid, operation, json.encodeToJsonElement(task).jsonObject)
     }
 
     private fun completedAtAfter(current: Task, target: TaskState, occurredAt: String): String? = when (target) {

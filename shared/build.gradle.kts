@@ -57,7 +57,7 @@ val deadlinerCoreCompileUserName = requiredBuildMetadataPart(
 )
 val deadlinerCoreVersion = "DeadlinerCore-$deadlinerCoreCompileDate-$deadlinerCoreCompileBranch@$deadlinerCoreCompileUserName"
 val deadlinerCoreBridgeVersion = providers.gradleProperty("deadlinerCoreBridgeVersion")
-    .orElse("12")
+    .orElse("13")
     .get()
     .toIntOrNull()
     ?.takeIf { it >= 0 }
