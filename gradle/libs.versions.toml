@@ -8,6 +8,7 @@ kotlinx-coroutines = "1.10.2-0.3.0"
 ktor = "3.3.3-0.3.0"
 androidx-core = "1.19.0"
 androidx-work = "2.11.2"
+onnxruntime = "1.31.0"
 
 [libraries]
 sqldelight-runtime = { module = "app.cash.sqldelight:runtime", version.ref = "sqldelight" }
@@ -27,6 +28,7 @@ ktor-client-curl = { module = "io.ktor:ktor-client-curl", version.ref = "ktor" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 androidx-core = { module = "androidx.core:core", version.ref = "androidx-core" }
 androidx-work-runtime = { module = "androidx.work:work-runtime", version.ref = "androidx-work" }
+onnxruntime-android = { module = "com.microsoft.onnxruntime:onnxruntime-android", version.ref = "onnxruntime" }
 
 [plugins]
 androidLibrary = { id = "com.android.library", version.ref = "agp" }

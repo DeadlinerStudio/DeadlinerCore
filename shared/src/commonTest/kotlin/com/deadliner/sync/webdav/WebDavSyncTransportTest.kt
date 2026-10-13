@@ -51,6 +51,18 @@ class WebDavSyncTransportTest {
     }
 
     @Test
+    fun `close keeps an injected client owned by its caller`() = runBlocking {
+        val transport = transport { request ->
+            assertEquals(HttpMethod.Head, request.method)
+            respond(content = "", status = HttpStatusCode.NotFound)
+        }
+
+        transport.close()
+
+        assertNull(transport.read("Deadliner/habit-snapshot-v2.json"))
+    }
+
+    @Test
     fun `write creates its parent collection and sends the ETag condition`() = runBlocking {
         val requests = mutableListOf<io.ktor.client.request.HttpRequestData>()
         val transport = transport { request ->

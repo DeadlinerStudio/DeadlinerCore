@@ -19,19 +19,19 @@
   - Task 协作：`TaskRepository` 与所有 `TaskActionOutcome` bridge
   - 同步：`shared/src/commonMain/kotlin/com/deadliner/sync/{snapshot,server}` 的独立 `focus_session` 资源
   - 展示状态：`shared/src/commonMain/kotlin/com/deadliner/viewmodel/focus`
-- Android（`~/Codes/ProjectDeadliner/Deadliner`）：
-  - `data/focus`：Core 适配、foreground service/alarm/notification gateway
-  - `ui/focus`：全屏时钟、迷你计时条、轻量历史与 Task 入口
+- Android（`~/Codes/Android/Deadliner`）：
+  - `notification`：foreground service、alarm/notification gateway
+  - `ui/focus`：全屏时钟、仅活动时出现的柔光玻璃胶囊、轻量历史与 Task 入口
   - Task/Widget 入口消费 `TIMER_REQUIRES_RESOLUTION`
-- iOS（`~/Codes/ProjectDeadliner/Deadliner-iOS`）：
-  - `Core/Application/UseCases/Focus`：KMP bridge 编排
-  - `Data/Focus`：本地通知和生命周期适配
-  - `Features/Focus`：SwiftUI 时钟、轻量历史、Task 入口
-- HarmonyOS（`~/Codes/ProjectDeadliner/DeadlinerNEXT`）：
-  - `entry/src/main/ets/model/focus`：bridge DTO
-  - `entry/src/main/ets/common/repository/focus`：Core 与 Reminder 适配
-  - `entry/src/main/ets/pages/routes/focus`：时钟和轻量历史
-  - `entry/src/main/ets/pages/components/focus`：迷你计时条与 Task 时间摘要
+- iOS（`~/Codes/iOS/Deadliner`）：
+  - `Core/Application/Services`：KMP alarm port 与本地通知适配
+  - `Core/Persistence`：typed KMP bridge 生命周期
+  - `Features/Focus`：SwiftUI 时钟、轻量历史、Task 入口；全局活动态入口后续收敛到 `TabView` 顶部功能区
+- HarmonyOS（`~/Codes/HarmonyOS/Deadliner`）：
+  - `entry/src/main/ets/model`：bridge DTO
+  - `entry/src/main/ets/common/kmp`：Core C ABI/NAPI repository 适配
+  - `entry/src/main/ets/utils/notification`：Reminder 适配
+  - `entry/src/main/ets/pages/routes/focus`：时钟和轻量历史；全局活动态入口后续使用 `HdsTabsMiniBar`
 
 ## 文件拆分策略
 
@@ -67,4 +67,12 @@
 - `FocusTimerService.kt`、`FocusTimerViewModel.kt`：确认后原子保存会话并完成、放弃或删除绑定 Task。
 - Snapshot 根合同提升至 v5；完成会话进入 WebDAV snapshot、DeadlinerServer 独立实体和 Backup，活动计时始终 local-only。
 - 已覆盖 v4→v5 迁移、会话同步与 tombstone、Server 往返、备份恢复清除活动计时、Task 入口拦截和组合事务。
-- Android、iOS、HarmonyOS bridge 与 UI 仍在下一平台批次。
+- 当时 Android、iOS、HarmonyOS bridge 与 UI 留待下一平台批次；现已按下一节所列完成。
+
+## 平台批次实际落点
+
+- Android：共享 ViewModel 直接接线，Task 详情/列表守门，全局入口与迷你条，foreground service、到点 alarm，以及会话更正/删除。
+- iOS：`IosFocusTimerStateBridge` typed state、`FocusAlarmPortAdapter` 本地通知、Task 详情与全局入口/迷你条，以及会话更正/删除。
+- HarmonyOS：Ohos C ABI + NAPI JSON contract、ArkTS repository/model、Reminder、Task 详情与全局入口/迷你条，以及会话更正/删除。
+- 三端均以 shared 状态机与持久化锚点为事实来源；UI tick 只负责刷新展示，恢复和自然到点由 shared reconcile 幂等收敛。
+- 2026-09-11：Android 先完成活动态柔光胶囊并作为视觉验收目标；iOS/HarmonyOS 的导航容器迁移先冻结为明确的后续 UI 工作，不与 Core 合同耦合。

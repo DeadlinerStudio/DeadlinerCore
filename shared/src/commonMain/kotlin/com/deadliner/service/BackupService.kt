@@ -48,6 +48,10 @@ class BackupService internal constructor(private val database: AppDatabase) {
     private fun SnapshotV3Root.upgradeV4(): SnapshotV3Root = when (formatVersion) {
         SnapshotV3Root.FORMAT_VERSION -> this
         4 -> copy(formatVersion = SnapshotV3Root.FORMAT_VERSION, focusSessions = emptyList())
+        5 -> {
+            require(focusSessions.all { it.doc?.boundTarget?.kind != com.deadliner.domain.focus.FocusTargetKind.HABIT }) { "V5 backup cannot contain Habit focus" }
+            copy(formatVersion = SnapshotV3Root.FORMAT_VERSION)
+        }
         else -> this
     }
 }

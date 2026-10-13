@@ -1,0 +1,26 @@
+[
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "55BEB642-665A-4F33-B291-2274647ABEFA.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "task-full-swipe-completed_0_95711CE9-AE1C-4BB7-8355-93F23254FDEF.png",
+        "timestamp" : 1791799749.496
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "B197D96D-AAC8-47CD-B428-AC7C75FD24FA.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "task-swipe-complete-focus-giveup_0_BD87A07B-DB49-40BF-A9F7-B5E662F8662C.png",
+        "timestamp" : 1791799739.599
+      }
+    ],
+    "testIdentifier" : "FocusNativeUITests/testTaskSwipeOrderAndFullSwipeCompletion()",
+    "testIdentifierURL" : "test://com.apple.xcode/DeadlinerFocusValidation/DeadlinerUITests/FocusNativeUITests/testTaskSwipeOrderAndFullSwipeCompletion"
+  }
+]

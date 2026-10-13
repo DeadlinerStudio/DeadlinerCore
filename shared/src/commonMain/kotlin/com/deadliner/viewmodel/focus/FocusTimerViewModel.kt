@@ -2,6 +2,9 @@ package com.deadliner.viewmodel.focus
 
 import com.deadliner.db.repository.TaskRepository
 import com.deadliner.db.repository.focus.FocusSessionRepository
+import com.deadliner.domain.focus.FocusTargetRef
+import com.deadliner.domain.focus.FocusTargetKind
+import com.deadliner.domain.focus.FocusHabitRecordContext
 import com.deadliner.domain.focus.ActiveFocusTimer
 import com.deadliner.domain.focus.FocusSession
 import com.deadliner.domain.focus.FocusTimerCommand
@@ -11,6 +14,7 @@ import com.deadliner.domain.focus.FocusTimerOutcome
 import com.deadliner.domain.focus.FocusTimerSnapshot
 import com.deadliner.domain.focus.FocusTimerWarning
 import com.deadliner.domain.task.TaskAction
+import com.deadliner.domain.task.TaskState
 import com.deadliner.service.focus.FocusTimerResult
 import com.deadliner.service.focus.FocusTimerService
 import kotlinx.coroutines.CoroutineScope
@@ -29,8 +33,11 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.plus
 import kotlinx.datetime.toInstant
 import kotlinx.datetime.toLocalDateTime
+import kotlinx.serialization.Serializable
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
-/** Shared Task-only focus timer presentation authority for every client. */
+/** Shared typed-target focus timer presentation authority for every client. */
 class FocusTimerViewModel(
     private val timerService: FocusTimerService,
     private val sessionRepository: FocusSessionRepository,
@@ -41,7 +48,10 @@ class FocusTimerViewModel(
 ) {
     private val _uiState = MutableStateFlow(FocusTimerUiState())
     val uiState: StateFlow<FocusTimerUiState> = _uiState.asStateFlow()
+    private var selectedTarget: FocusTargetRef? = null
     private var activeTimer: ActiveFocusTimer? = null
+    private var monotonicAnchor: TimeMark? = null
+    private var wallClockAnchor: Instant? = null
 
     fun initialize() {
         scope.launch { loadNow(reconcile = true) }
@@ -54,7 +64,15 @@ class FocusTimerViewModel(
     /** Recomputes display time from persisted anchors without writing or querying session statistics. */
     fun tick() {
         val active = activeTimer ?: return
-        val now = nowProvider()
+        val anchor = monotonicAnchor
+        val wallAnchor = wallClockAnchor
+        val now = if (anchor != null && wallAnchor != null) {
+            Instant.fromEpochMilliseconds(
+                wallAnchor.toEpochMilliseconds() + anchor.elapsedNow().inWholeMilliseconds,
+            )
+        } else {
+            nowProvider()
+        }
         if (FocusTimerEngine.calculate(active, now).countdownElapsed) {
             if (!_uiState.value.isBusy) submit(FocusTimerCommand.Reconcile)
             return
@@ -70,7 +88,8 @@ class FocusTimerViewModel(
         )
         _uiState.update {
             it.copy(
-                timer = snapshot,
+                timer = snapshot.copy(habitRecordContext = it.timer?.habitRecordContext,
+                    canFinishAndRecord = snapshot.canFinish && it.timer?.habitRecordContext?.canRecord == true),
                 warning = snapshot.warning,
             )
         }
@@ -80,6 +99,12 @@ class FocusTimerViewModel(
         submit(FocusTimerCommand.Start(taskUid, mode, plannedDurationSeconds))
     }
 
+    fun startHabit(habitUid: String, mode: FocusTimerMode, plannedDurationSeconds: Long? = null) =
+        submit(FocusTimerCommand.StartHabit(habitUid, mode, plannedDurationSeconds))
+
+    fun finishAndRecordHabit(sessionUid: String, amount: Int? = null, expectedHabitUpdatedAt: String? = null) =
+        submit(FocusTimerCommand.FinishAndRecordHabit(sessionUid, amount, expectedHabitUpdatedAt))
+
     fun pause() = submit(FocusTimerCommand.Pause)
 
     fun resume() = submit(FocusTimerCommand.Resume)
@@ -88,11 +113,30 @@ class FocusTimerViewModel(
 
     fun finishAndCompleteTask() = submit(FocusTimerCommand.FinishAndCompleteTask)
 
+    fun completeSavedTask(sessionUid: String) {
+        if (!beginOperation()) return
+        scope.launch { completeSavedTaskNow(sessionUid) }
+    }
+
     fun discard() = submit(FocusTimerCommand.Discard)
 
     fun selectTask(taskUid: String?) {
         if (_uiState.value.isBusy) return
+        selectedTarget = taskUid?.takeIf { it.isNotBlank() }?.let { FocusTargetRef(FocusTargetKind.TASK, it) }
         refreshStatistics(nowProvider(), taskUid)
+    }
+
+    fun selectTarget(target: FocusTargetRef?) {
+        if (_uiState.value.isBusy) return
+        selectedTarget = target
+        refreshStatistics(nowProvider(), target?.takeIf { it.kind == FocusTargetKind.TASK }?.uid)
+    }
+
+    fun selectSession(sessionUid: String) {
+        if (_uiState.value.isBusy || activeTimer != null) return
+        val session = sessionRepository.find(sessionUid)?.takeUnless { it.isDeleted } ?: return
+        selectedTarget = session.boundTarget
+        refreshStatistics(nowProvider(), session.taskUid.takeIf { it.isNotBlank() }, lastCompletedSession = session)
     }
 
     fun resolveTaskAction(taskUid: String, action: TaskAction) {
@@ -103,6 +147,12 @@ class FocusTimerViewModel(
     fun resolveTaskDeletion(taskUid: String) {
         if (!beginOperation()) return
         scope.launch { resolveTaskDeletionNow(taskUid) }
+    }
+
+    /** Platform confirmation path; preserves the service's atomic focus + Habit mutation. */
+    fun resolveHabitChange(habitUid: String, delete: Boolean) {
+        if (!beginOperation()) return
+        scope.launch { resolveHabitChangeNow(habitUid, delete) }
     }
 
     fun adjustSessionDuration(sessionUid: String, durationSeconds: Long) {
@@ -122,7 +172,10 @@ class FocusTimerViewModel(
             } else {
                 timerService.current(now)
             }
-            publish(result, now)
+            val recovered = if (result.activeTimer == null && result.session == null && _uiState.value.lastCompletedSession == null) {
+                result.copy(session = sessionRepository.latestForNotification()?.takeUnless { it.isDeleted })
+            } else result
+            publish(recovered, now)
         }.getOrElse(::publishError)
     }
 
@@ -133,18 +186,31 @@ class FocusTimerViewModel(
             .getOrElse(::publishError)
     }
 
-    suspend fun resolveTaskActionNow(taskUid: String, action: TaskAction): FocusTimerUiState {
+    suspend fun resolveTaskActionNow(taskUid: String, action: TaskAction, expectedSessionUid: String? = null): FocusTimerUiState {
         val now = nowProvider()
         _uiState.update { it.copy(isBusy = true, error = null) }
-        return runCatching { publish(timerService.resolveTaskAction(taskUid, action, now), now) }
+        return runCatching { publish(timerService.resolveTaskAction(taskUid, action, now, expectedSessionUid), now) }
             .getOrElse(::publishError)
     }
 
-    suspend fun resolveTaskDeletionNow(taskUid: String): FocusTimerUiState {
+    suspend fun resolveTaskDeletionNow(taskUid: String, expectedSessionUid: String? = null): FocusTimerUiState {
         val now = nowProvider()
         _uiState.update { it.copy(isBusy = true, error = null) }
-        return runCatching { publish(timerService.resolveTaskDeletion(taskUid, now), now) }
+        return runCatching { publish(timerService.resolveTaskDeletion(taskUid, now, expectedSessionUid), now) }
             .getOrElse(::publishError)
+    }
+
+    suspend fun resolveHabitChangeNow(habitUid: String, delete: Boolean, expectedSessionUid: String? = null): FocusTimerUiState {
+        val now = nowProvider()
+        _uiState.update { it.copy(isBusy = true, error = null) }
+        return runCatching { publish(timerService.resolveHabitChange(habitUid, delete, now, expectedSessionUid), now) }
+            .getOrElse(::publishError)
+    }
+
+    suspend fun completeSavedTaskNow(sessionUid: String): FocusTimerUiState {
+        val now = nowProvider()
+        _uiState.update { it.copy(isBusy = true, error = null) }
+        return runCatching { publish(timerService.completeSavedTask(sessionUid, now), now) }.getOrElse(::publishError)
     }
 
     suspend fun adjustSessionDurationNow(sessionUid: String, durationSeconds: Long): FocusTimerUiState {
@@ -152,6 +218,7 @@ class FocusTimerViewModel(
         _uiState.update { it.copy(isBusy = true, error = null) }
         return runCatching {
             val mutation = sessionRepository.adjustDuration(sessionUid, durationSeconds, now.toString())
+            mutation.session?.let { selectedTarget = it.boundTarget }
             refreshStatistics(
                 now = now,
                 selectedTaskUid = mutation.session?.taskUid ?: _uiState.value.selectedTaskUid,
@@ -165,6 +232,7 @@ class FocusTimerViewModel(
         _uiState.update { it.copy(isBusy = true, error = null) }
         return runCatching {
             val mutation = sessionRepository.delete(sessionUid, now.toString())
+            mutation.session?.let { selectedTarget = it.boundTarget }
             refreshStatistics(
                 now = now,
                 selectedTaskUid = mutation.session?.taskUid ?: _uiState.value.selectedTaskUid,
@@ -186,7 +254,10 @@ class FocusTimerViewModel(
 
     private fun publish(result: FocusTimerResult, now: Instant): FocusTimerUiState {
         activeTimer = result.activeTimer
-        val selectedTaskUid = result.snapshot?.taskUid
+        monotonicAnchor = result.activeTimer?.let { TimeSource.Monotonic.markNow() }
+        wallClockAnchor = result.activeTimer?.let { now }
+        selectedTarget = result.activeTimer?.boundTarget ?: result.session?.boundTarget ?: selectedTarget
+        val selectedTaskUid = if (selectedTarget?.kind == FocusTargetKind.HABIT) null else result.snapshot?.taskUid
             ?: result.session?.taskUid
             ?: result.task?.uid
             ?: _uiState.value.selectedTaskUid
@@ -194,7 +265,7 @@ class FocusTimerViewModel(
             now = now,
             selectedTaskUid = selectedTaskUid,
             timer = result.snapshot,
-            lastCompletedSession = result.session,
+            lastCompletedSession = result.session ?: _uiState.value.lastCompletedSession.takeIf { result.activeTimer == null },
             outcome = result.outcome,
             warning = result.warning ?: result.snapshot?.warning,
         )
@@ -210,7 +281,7 @@ class FocusTimerViewModel(
     ): FocusTimerUiState {
         val range = focusLocalDayRange(now, timeZoneProvider())
         val task = selectedTaskUid?.let(taskRepository::find)
-        val taskRecentSessions = selectedTaskUid?.let {
+        val taskRecentSessions = if (selectedTarget?.kind == FocusTargetKind.HABIT) sessionRepository.forTarget(selectedTarget!!).take(RECENT_TASK_SESSION_LIMIT) else selectedTaskUid?.let {
             sessionRepository.recentForTask(it, RECENT_TASK_SESSION_LIMIT)
         }.orEmpty()
         val state = FocusTimerUiState(
@@ -222,15 +293,23 @@ class FocusTimerViewModel(
                 .toInt(),
             recentSessions = sessionRepository.recent(RECENT_SESSION_LIMIT),
             selectedTaskUid = selectedTaskUid,
-            selectedTaskTitle = task?.title
+            selectedTarget = selectedTarget,
+            habitRecordContext = timer?.habitRecordContext ?: lastCompletedSession?.let { timerService.habitRecordContext(it, now) },
+            selectedTaskTitle = timer?.taskTitle ?: task?.title
                 ?: taskRecentSessions.firstOrNull()?.taskTitleSnapshot
                 ?: lastCompletedSession?.takeIf { it.taskUid == selectedTaskUid }?.taskTitleSnapshot,
-            selectedTaskTodayDurationSeconds = selectedTaskUid?.let {
+            selectedTaskTodayDurationSeconds = if (selectedTarget?.kind == FocusTargetKind.HABIT) sessionRepository.forTarget(selectedTarget!!).filter { Instant.parse(it.startedAt) >= range.start && Instant.parse(it.startedAt) < range.end }.sumOf { it.durationSeconds } else selectedTaskUid?.let {
                 sessionRepository.totalForTaskStartedInRange(it, range.start.toString(), range.end.toString())
             } ?: 0,
-            selectedTaskTotalDurationSeconds = selectedTaskUid?.let(sessionRepository::totalForTask) ?: 0,
+            selectedTaskTotalDurationSeconds = if (selectedTarget?.kind == FocusTargetKind.HABIT) sessionRepository.forTarget(selectedTarget!!).sumOf { it.durationSeconds } else selectedTaskUid?.let(sessionRepository::totalForTask) ?: 0,
             selectedTaskRecentSessions = taskRecentSessions,
             lastCompletedSession = lastCompletedSession,
+            lastCompletedTaskState = lastCompletedSession?.takeIf { !it.isDeleted && it.boundTarget.kind == FocusTargetKind.TASK }
+                ?.let { sessionRepository.find(it.uid)?.takeUnless { saved -> saved.isDeleted } }
+                ?.let { taskRepository.find(it.boundTarget.uid)?.takeUnless { target -> target.isDeleted }?.state },
+            canCompleteLastTask = lastCompletedSession?.takeIf { it.boundTarget.kind == FocusTargetKind.TASK && !it.isDeleted }
+                ?.let { sessionRepository.find(it.uid)?.takeUnless { saved -> saved.isDeleted } }
+                ?.let { saved -> taskRepository.find(saved.boundTarget.uid)?.let { !it.isDeleted && it.state == TaskState.ACTIVE && timer?.target != saved.boundTarget && timer?.taskUid != saved.taskUid } } == true,
             lastOutcome = outcome,
             warning = warning,
             isLoading = false,
@@ -256,8 +335,11 @@ class FocusTimerViewModel(
     }
 }
 
+@Serializable
 data class FocusTimerUiState(
     val timer: FocusTimerSnapshot? = null,
+    val selectedTarget: FocusTargetRef? = null,
+    val habitRecordContext: FocusHabitRecordContext? = null,
     val todayDurationSeconds: Long = 0,
     val todaySessionCount: Int = 0,
     val recentSessions: List<FocusSession> = emptyList(),
@@ -267,6 +349,8 @@ data class FocusTimerUiState(
     val selectedTaskTotalDurationSeconds: Long = 0,
     val selectedTaskRecentSessions: List<FocusSession> = emptyList(),
     val lastCompletedSession: FocusSession? = null,
+    val lastCompletedTaskState: TaskState? = null,
+    val canCompleteLastTask: Boolean = false,
     val lastOutcome: FocusTimerOutcome? = null,
     val warning: FocusTimerWarning? = null,
     val isLoading: Boolean = true,

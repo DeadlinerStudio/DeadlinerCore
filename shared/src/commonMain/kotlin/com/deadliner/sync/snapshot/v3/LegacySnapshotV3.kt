@@ -24,6 +24,14 @@ internal object LegacySnapshotV3Migrator {
         }
         val habits = snapshot["habits"] as? JsonArray ?: JsonArray(emptyList())
         val snapshotVersion = snapshot.intOrNull("format_version")
+        if (payloadVersion == 5 || snapshotVersion == 5) {
+            val focus = snapshot["focus_sessions"] as? JsonArray
+            require(focus.orEmpty().none { item ->
+                val doc = (item as? JsonObject)?.get("doc") as? JsonObject
+                val target = doc?.get("target") as? JsonObject
+                (target?.get("kind") as? JsonPrimitive)?.content == "HABIT"
+            }) { "V5 cannot contain Habit focus" }
+        }
         val hasLegacyHabit = habits.any(::isLegacyHabitItem)
         val isDeclaredLegacy = (payloadVersion != null && payloadVersion in LEGACY_FORMAT_VERSIONS) ||
             (snapshotVersion != null && snapshotVersion in LEGACY_FORMAT_VERSIONS)
@@ -174,8 +182,8 @@ internal object LegacySnapshotV3Migrator {
         "totalTarget",
         "total_target",
     )
-    private val LEGACY_FORMAT_VERSIONS = setOf(3, 4)
+    private val LEGACY_FORMAT_VERSIONS = setOf(3, 4, 5)
     private val SUPPORTED_INPUT_VERSIONS = LEGACY_FORMAT_VERSIONS + CURRENT_FORMAT_VERSION
-    private const val CURRENT_FORMAT_VERSION = 5
+    private const val CURRENT_FORMAT_VERSION = 6
     private const val FALLBACK_START_DATE = "1970-01-01"
 }

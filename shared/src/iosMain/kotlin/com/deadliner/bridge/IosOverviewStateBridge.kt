@@ -1,9 +1,18 @@
 package com.deadliner.bridge
 
 import com.deadliner.db.DeadlinerDatabase
+import com.deadliner.viewmodel.overview.OverviewMonthUiState
+import com.deadliner.domain.focus.FocusSession
+import com.deadliner.domain.focus.FocusTimerOutcome
+import com.deadliner.domain.statistics.FocusStatisticsQuery
+import com.deadliner.domain.statistics.FocusStatisticsSnapshot
+import com.deadliner.viewmodel.focus.FocusTimerViewModel
+import com.deadliner.platform.FocusAlarmPort
+import kotlinx.coroutines.CancellationException
 import com.deadliner.viewmodel.overview.OverviewUiState
 import com.deadliner.viewmodel.overview.OverviewViewModel
 import com.deadliner.platform.PlatformLogger
+import com.deadliner.domain.statistics.FocusOverviewStatistics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -13,7 +22,7 @@ import kotlinx.coroutines.launch
 
 /** Owns Overview StateFlow collection so Swift never has to manage coroutines. */
 class IosOverviewStateBridge(
-    database: DeadlinerDatabase,
+    private val database: DeadlinerDatabase,
 ) : AutoCloseable {
     /** Repository reads and chart aggregation run away from the UI thread. */
     private val workerScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -55,6 +64,59 @@ class IosOverviewStateBridge(
     fun refresh() {
         overviewBridgeLog("refresh requested")
         viewModel.refresh()
+    }
+
+    /** Separate focus projection keeps task completion metrics unchanged. */
+    fun loadFocus(onState: (FocusOverviewStatistics) -> Unit) {
+        workerScope.launch {
+            val state = database.focusStatistics.overview()
+            callbackScope.launch { onState(state) }
+        }
+    }
+
+    /** Each domain has its own failure callback; no failed read becomes a fake zero. */
+    fun loadMonth(monthStart: String, onState: (OverviewMonthUiState) -> Unit, onError: (String) -> Unit) {
+        workerScope.launch {
+            try {
+                val state = viewModel.loadMonthNow(monthStart)
+                callbackScope.launch { onState(state) }
+            } catch (error: CancellationException) { throw error }
+            catch (error: Throwable) { callbackScope.launch { onError(error.message ?: "月度数据加载失败") } }
+        }
+    }
+
+    fun loadFocusSafely(onState: (FocusOverviewStatistics) -> Unit, onError: (String) -> Unit) {
+        workerScope.launch {
+            try {
+                val state = database.focusStatistics.overview()
+                callbackScope.launch { onState(state) }
+            } catch (error: CancellationException) { throw error }
+            catch (error: Throwable) { callbackScope.launch { onError(error.message ?: "专注数据加载失败") } }
+        }
+    }
+
+    fun loadFocusManagement(onState: (List<FocusSession>, FocusStatisticsSnapshot) -> Unit, onError: (String) -> Unit) {
+        workerScope.launch {
+            try {
+                val sessions = database.focusSessions.list().filterNot { it.isDeleted }.sortedByDescending { it.startedAt }
+                val statistics = database.focusStatistics.snapshot(FocusStatisticsQuery())
+                callbackScope.launch { onState(sessions, statistics) }
+            } catch (error: CancellationException) { throw error }
+            catch (error: Throwable) { callbackScope.launch { onError(error.message ?: "专注记录加载失败") } }
+        }
+    }
+
+    /** Reuse the timer use cases, including downward-only adjustment and soft deletion. */
+    fun mutateFocusSession(sessionUid: String, durationSeconds: Long?, onResult: (FocusTimerOutcome, String?) -> Unit) {
+        workerScope.launch {
+            try {
+                val model = FocusTimerViewModel(database.createFocusTimerService(FocusAlarmPort.NONE), database.focusSessions, database.tasks, workerScope)
+                val state = if (durationSeconds == null) model.deleteSessionNow(sessionUid)
+                    else model.adjustSessionDurationNow(sessionUid, durationSeconds)
+                callbackScope.launch { onResult(state.lastOutcome ?: FocusTimerOutcome.INVALID_STATE, state.error) }
+            } catch (error: CancellationException) { throw error }
+            catch (error: Throwable) { callbackScope.launch { onResult(FocusTimerOutcome.INVALID_STATE, error.message) } }
+        }
     }
 
     override fun close() {

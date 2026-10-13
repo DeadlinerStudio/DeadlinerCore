@@ -1,0 +1,9 @@
+-- Preserve all Task-only sessions and the device-local active timer as TASK.
+ALTER TABLE focus_session ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'TASK';
+ALTER TABLE focus_session ADD COLUMN habit_uid TEXT;
+ALTER TABLE focus_session ADD COLUMN habit_occurred_on TEXT;
+ALTER TABLE focus_session ADD COLUMN habit_recorded_amount INTEGER;
+ALTER TABLE active_focus_timer ADD COLUMN target_kind TEXT NOT NULL DEFAULT 'TASK';
+ALTER TABLE active_focus_timer ADD COLUMN habit_uid TEXT;
+ALTER TABLE active_focus_timer ADD COLUMN habit_occurred_on TEXT;
+CREATE INDEX idx_focus_session_habit ON focus_session(is_deleted, target_kind, habit_uid, started_at);

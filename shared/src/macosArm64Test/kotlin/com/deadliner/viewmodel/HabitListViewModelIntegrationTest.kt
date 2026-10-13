@@ -27,6 +27,31 @@ import platform.posix.remove
 
 class HabitListViewModelIntegrationTest {
     @Test
+    fun reloadAfterExternalArchivePreservesCalendarAndSearch() {
+        val path = "${NSTemporaryDirectory()}deadliner-habit-focus-refresh-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            val habit = Habit(uid = "focus-refresh", name = "Focus refresh", period = HabitPeriod.DAILY,
+                createdAt = "2026-08-10T08:00:00Z")
+            database.habits.create(habit)
+            val viewModel = HabitListViewModel(database.habits)
+            viewModel.loadNow()
+            viewModel.selectDate("2026-08-13")
+            viewModel.updateSearchQuery("Focus")
+            assertEquals(1, viewModel.uiState.value.visibleHabits.size)
+            database.habits.applyStatusAction(habit.uid, com.deadliner.domain.habit.HabitStatusAction.ARCHIVE,
+                "2026-08-13T10:00:00Z")
+            val refreshed = viewModel.loadNow()
+            assertTrue(refreshed.visibleHabits.isEmpty())
+            assertEquals("2026-08-13", refreshed.selectedDate)
+            assertEquals("Focus", refreshed.searchQuery)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
     fun pullBridgeIntentsKeepHabitAndRecordStateInOneViewModelSnapshot() {
         val path = "${NSTemporaryDirectory()}deadliner-habit-viewmodel-${NSUUID().UUIDString}.db"
         val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))

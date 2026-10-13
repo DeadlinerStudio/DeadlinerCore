@@ -3,6 +3,8 @@ package com.deadliner.sync.server
 import com.deadliner.domain.focus.FocusCompletionKind
 import com.deadliner.domain.focus.FocusSession
 import com.deadliner.domain.focus.FocusTimerMode
+import com.deadliner.domain.focus.FocusTargetRef
+import com.deadliner.domain.focus.FocusTargetKind
 import com.deadliner.domain.task.Task
 import com.deadliner.sync.server.mapping.ServerSnapshotMapper
 import com.deadliner.sync.server.mapping.ServerSyncEntityKey
@@ -90,6 +92,19 @@ class ServerSnapshotMapperTest {
             createdAt = "2026-08-30T09:20:00Z",
             updatedAt = version.ts,
         )
+        assertFocusRoundTrip(session)
+    }
+
+    @Test
+    fun habitFocusPreservesTypedTargetAndJointEvidenceThroughServerEnvelope() {
+        assertFocusRoundTrip(FocusSession("habit-focus", "", "Reading", FocusTimerMode.STOPWATCH,
+            startedAt = "2026-08-30T09:00:00Z", endedAt = "2026-08-30T09:20:00Z", durationSeconds = 1_200,
+            completionKind = FocusCompletionKind.FOCUS_AND_HABIT_RECORDED, createdAt = version.ts,
+            target = FocusTargetRef(FocusTargetKind.HABIT, "habit-1"),
+            habitOccurredOn = "2026-08-30", habitRecordedAmount = 7))
+    }
+
+    private fun assertFocusRoundTrip(session: FocusSession) {
         val key = ServerSyncEntityKey(ServerSyncEntityKind.FOCUS_SESSION, session.uid)
         val mutation = mapper.mutations(
             SnapshotV3Root(

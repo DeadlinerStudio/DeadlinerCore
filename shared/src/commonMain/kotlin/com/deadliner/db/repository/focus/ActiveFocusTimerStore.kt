@@ -1,6 +1,8 @@
 package com.deadliner.db.repository.focus
 
 import com.deadliner.db.AppDatabase
+import com.deadliner.domain.focus.FocusTargetRef
+import com.deadliner.domain.focus.FocusTargetKind
 import com.deadliner.domain.focus.ActiveFocusTimer
 import com.deadliner.domain.focus.FocusTimerMode
 import com.deadliner.domain.focus.FocusTimerState
@@ -23,6 +25,9 @@ class ActiveFocusTimerStore(
             active.runningSegmentStartedAt,
             active.accumulatedSeconds,
             active.updatedAt,
+            active.boundTarget.kind.name,
+            active.target?.takeIf { it.kind == FocusTargetKind.HABIT }?.uid,
+            active.habitOccurredOn,
         )
     }
 
@@ -41,6 +46,9 @@ class ActiveFocusTimerStore(
         runningSegmentStartedAt: String?,
         accumulatedSeconds: Long,
         updatedAt: String,
+        targetKind: String,
+        habitUid: String?,
+        habitOccurredOn: String?,
     ) = ActiveFocusTimer(
         sessionUid = sessionUid,
         taskUid = taskUid,
@@ -52,5 +60,7 @@ class ActiveFocusTimerStore(
         runningSegmentStartedAt = runningSegmentStartedAt,
         accumulatedSeconds = accumulatedSeconds,
         updatedAt = updatedAt,
+        target = if (targetKind == "HABIT") FocusTargetRef(FocusTargetKind.HABIT, requireNotNull(habitUid)) else null,
+        habitOccurredOn = habitOccurredOn,
     )
 }

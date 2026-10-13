@@ -19,6 +19,8 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class SnapshotV3Root(
     @SerialName("format_version")
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.ALWAYS)
     val formatVersion: Int = FORMAT_VERSION,
     val version: SnapshotV3Version,
     val categories: List<SnapshotV3CategoryItem> = emptyList(),
@@ -35,7 +37,7 @@ data class SnapshotV3Root(
     val userProfiles: List<SnapshotV3UserProfileItem> = emptyList(),
 ) {
     companion object {
-        const val FORMAT_VERSION = 5
+        const val FORMAT_VERSION = 6
     }
 }
 

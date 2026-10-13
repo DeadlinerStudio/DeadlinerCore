@@ -5,7 +5,7 @@
 - 产品：Deadliner
 - 功能：Task 专注计时与总时长
 - 版本：PRD v0.2
-- 状态：已冻结（Core 第一阶段）
+- 状态：已实现（Task-only MVP，待发布前真机 QA）
 - 初稿日期：2026-09-01
 - 更新日期：2026-09-10
 - 目标平台：Android、iOS、HarmonyOS

@@ -29,6 +29,22 @@ On an Apple Silicon Mac, run the real SQLite integration suite with:
 bash runscript/testMacDatabase.sh
 ```
 
+For complete Native stability acceptance (three unfiltered Gradle suites with
+verified XML, then ten suites in one process), run:
+
+```bash
+runscript/verifyNativeRegression.sh
+```
+
+CPF Native `2.2.21-0.3.0` has an exception ShadowStack restoration defect. The
+build selects a fingerprint-guarded repaired SDK under `build/native-toolchains`
+before applying KGP; the original `.konan` installation is unchanged. Unknown
+compiler fingerprints fail closed. On a fresh machine, first run
+`./gradlew :shared:downloadKotlinNativeDistribution`. Toolchain upgrades require
+rechecking/removing this repair and repeating full regression. See the
+[diagnosis](specs/native-test-stability/diagnosis.md) and
+[acceptance results](specs/native-test-stability/validation.md).
+
 ### One-command local deployment
 
 Build every release binary and put it directly in the matching local client

@@ -47,8 +47,10 @@ object FocusTimerEngine {
             canPause = active.state == FocusTimerState.RUNNING,
             canResume = active.state == FocusTimerState.PAUSED && taskIsActive,
             canFinish = hasDuration && !calculation.clockAnomaly,
-            canFinishAndComplete = hasDuration && !calculation.clockAnomaly && taskIsActive,
+            canFinishAndComplete = active.boundTarget.kind == FocusTargetKind.TASK && hasDuration && !calculation.clockAnomaly && taskIsActive,
             warning = warning,
+            target = active.target,
+            habitOccurredOn = active.habitOccurredOn,
         )
     }
 
@@ -143,6 +145,8 @@ object FocusTimerEngine {
                 completionKind = completionKind,
                 createdAt = endedAt.toString(),
                 updatedAt = endedAt.toString(),
+                target = active.target,
+                habitOccurredOn = active.habitOccurredOn,
             ),
         )
     }

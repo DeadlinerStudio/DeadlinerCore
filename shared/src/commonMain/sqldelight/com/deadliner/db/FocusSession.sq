@@ -1,40 +1,40 @@
 selectAll:
 SELECT uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
-       duration_seconds, completion_kind, created_at, updated_at, is_deleted
+       duration_seconds, completion_kind, created_at, updated_at, is_deleted, target_kind, habit_uid, habit_occurred_on, habit_recorded_amount
 FROM focus_session
 WHERE is_deleted = 0
 ORDER BY started_at DESC, created_at DESC;
 
 selectAllIncludingDeleted:
 SELECT uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
-       duration_seconds, completion_kind, created_at, updated_at, is_deleted
+       duration_seconds, completion_kind, created_at, updated_at, is_deleted, target_kind, habit_uid, habit_occurred_on, habit_recorded_amount
 FROM focus_session
 ORDER BY started_at DESC, created_at DESC;
 
 selectByUid:
 SELECT uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
-       duration_seconds, completion_kind, created_at, updated_at, is_deleted
+       duration_seconds, completion_kind, created_at, updated_at, is_deleted, target_kind, habit_uid, habit_occurred_on, habit_recorded_amount
 FROM focus_session
 WHERE uid = ?;
 
 selectForTask:
 SELECT uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
-       duration_seconds, completion_kind, created_at, updated_at, is_deleted
+       duration_seconds, completion_kind, created_at, updated_at, is_deleted, target_kind, habit_uid, habit_occurred_on, habit_recorded_amount
 FROM focus_session
-WHERE task_uid = ? AND is_deleted = 0
+WHERE target_kind = 'TASK' AND task_uid = ? AND is_deleted = 0
 ORDER BY started_at DESC, created_at DESC;
 
 selectRecentForTask:
 SELECT uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
-       duration_seconds, completion_kind, created_at, updated_at, is_deleted
+       duration_seconds, completion_kind, created_at, updated_at, is_deleted, target_kind, habit_uid, habit_occurred_on, habit_recorded_amount
 FROM focus_session
-WHERE task_uid = :task_uid AND is_deleted = 0
+WHERE target_kind = 'TASK' AND task_uid = :task_uid AND is_deleted = 0
 ORDER BY started_at DESC, created_at DESC
 LIMIT :limit;
 
 selectRecent:
 SELECT uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
-       duration_seconds, completion_kind, created_at, updated_at, is_deleted
+       duration_seconds, completion_kind, created_at, updated_at, is_deleted, target_kind, habit_uid, habit_occurred_on, habit_recorded_amount
 FROM focus_session
 WHERE is_deleted = 0
 ORDER BY started_at DESC, created_at DESC
@@ -43,7 +43,7 @@ LIMIT :limit;
 sumDurationForTask:
 SELECT COALESCE(SUM(duration_seconds), 0)
 FROM focus_session
-WHERE task_uid = ? AND is_deleted = 0;
+WHERE target_kind = 'TASK' AND task_uid = ? AND is_deleted = 0;
 
 sumDurationStartedInRange:
 SELECT COALESCE(SUM(duration_seconds), 0)
@@ -58,7 +58,7 @@ WHERE is_deleted = 0 AND started_at >= :start_inclusive AND started_at < :end_ex
 sumDurationForTaskStartedInRange:
 SELECT COALESCE(SUM(duration_seconds), 0)
 FROM focus_session
-WHERE task_uid = :task_uid
+WHERE target_kind = 'TASK' AND task_uid = :task_uid
   AND is_deleted = 0
   AND started_at >= :start_inclusive
   AND started_at < :end_exclusive;
@@ -66,14 +66,14 @@ WHERE task_uid = :task_uid
 insertSession:
 INSERT OR IGNORE INTO focus_session (
     uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
-    duration_seconds, completion_kind, created_at, updated_at, is_deleted
+    duration_seconds, completion_kind, created_at, updated_at, is_deleted, target_kind, habit_uid, habit_occurred_on, habit_recorded_amount
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateSession:
 UPDATE focus_session
 SET task_uid = ?, task_title_snapshot = ?, mode = ?, planned_duration_seconds = ?, started_at = ?,
-    ended_at = ?, duration_seconds = ?, completion_kind = ?, updated_at = ?, is_deleted = ?
+    ended_at = ?, duration_seconds = ?, completion_kind = ?, updated_at = ?, is_deleted = ?, target_kind = ?, habit_uid = ?, habit_occurred_on = ?, habit_recorded_amount = ?
 WHERE uid = ?;
 
 softDeleteSession:
@@ -81,3 +81,15 @@ UPDATE focus_session SET is_deleted = 1, updated_at = ? WHERE uid = ?;
 
 deleteAll:
 DELETE FROM focus_session;
+
+selectLatestForNotification:
+SELECT uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
+       duration_seconds, completion_kind, created_at, updated_at, is_deleted, target_kind, habit_uid, habit_occurred_on, habit_recorded_amount
+FROM focus_session ORDER BY ended_at DESC, created_at DESC, uid DESC LIMIT 1;
+
+selectForTarget:
+SELECT uid, task_uid, task_title_snapshot, mode, planned_duration_seconds, started_at, ended_at,
+       duration_seconds, completion_kind, created_at, updated_at, is_deleted, target_kind, habit_uid, habit_occurred_on, habit_recorded_amount
+FROM focus_session
+WHERE target_kind = :target_kind AND (CASE WHEN target_kind = 'HABIT' THEN habit_uid ELSE task_uid END) = :target_uid AND is_deleted = 0
+ORDER BY started_at DESC, created_at DESC;

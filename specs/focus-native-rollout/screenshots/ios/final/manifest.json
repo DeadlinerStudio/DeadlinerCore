@@ -1,0 +1,131 @@
+[
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "4EC00B61-CED2-404D-961E-609A637E831E.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "habit-binary-countdown-actual-history_0_F7174464-4CBB-42F2-A961-69B0FA3A4F6F.png",
+        "timestamp" : 1791786262.331
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "64D6F32E-6300-4F34-A5A0-1E63498B3B99.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "target-menu-Focus native binary fixture_0_6FC479C1-0EAB-4A13-A580-FF5BF80C1FFA.png",
+        "timestamp" : 1791786251.484
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "7ECF77B0-596C-4FB8-8B43-A3278AF85740.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "habit-completed-history_0_79B1F58D-9F92-48D3-84DE-B4B2AD46DD37.png",
+        "timestamp" : 1791786245.533
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "91090BFF-CE10-47A4-9645-D4D7512E136E.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "habit-quantity-confirm_0_66B79B26-047E-4BE1-A3AC-797A59153F8C.png",
+        "timestamp" : 1791786242.888
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "B03DDDD9-1A52-47AB-82EA-A30234130B7D.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "target-menu-Focus native quantity fixture_0_741B8F7E-ED39-493A-A797-4E968DF2A0A8.png",
+        "timestamp" : 1791786232.707
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "26BF4681-7B49-408A-ADDA-F269063BF3D0.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "task-paused-accessory_0_841BB760-A90F-4869-BC5B-C6BBD40B71C8.png",
+        "timestamp" : 1791786212.955
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "AFC2B103-BA0E-4EFF-B731-C13C78165D68.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "target-menu-Focus native task fixture_0_67F3EF26-506B-4C0D-AB6A-DA3784CEBA33.png",
+        "timestamp" : 1791786204.569
+      }
+    ],
+    "testIdentifier" : "FocusNativeUITests/testTaskHabitAndAccessoryFlows()",
+    "testIdentifierURL" : "test://com.apple.xcode/DeadlinerFocusValidation/DeadlinerUITests/FocusNativeUITests/testTaskHabitAndAccessoryFlows"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "335A4617-D45E-430D-A624-B6A717B7B7E6.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "overview-上月_0_212976DF-A4C8-46FC-A8C4-2FF23F800BBB.png",
+        "timestamp" : 1791786318.143
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "43552C9F-4939-47E6-A51C-B3EA539D5BFA.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "overview-趋势_0_2DA2C8AD-2F14-4782-9EB3-38327AD0BD50.png",
+        "timestamp" : 1791786313.004
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "C989A301-AA9B-4C9D-BB6C-50E99F56217F.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "overview-focus-summary_0_D92F92D4-D2CE-418C-8311-8C29CC551E67.png",
+        "timestamp" : 1791786309.662
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "CDE8A7D6-20A7-4288-894C-931EE6729D08.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "history-deleted-checkin-preserved_0_4C6FA835-DEB5-4385-9FEF-2727600525BA.png",
+        "timestamp" : 1791786303.916
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "1401CEAF-1849-4F83-9482-834BC19E586B.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "history-corrected-one-second_0_9162C216-D05F-4923-B14E-9612C5F2885C.png",
+        "timestamp" : 1791786297.054
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "FD3122F1-FCD1-4E7F-B723-F23895F9EC43.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "target-menu-Focus native binary fixture_0_911769F7-72C9-4BE9-95E0-D3D88A8988BD.png",
+        "timestamp" : 1791786278.457
+      }
+    ],
+    "testIdentifier" : "FocusNativeUITests/testZHistoryAndStatisticsFlows()",
+    "testIdentifierURL" : "test://com.apple.xcode/DeadlinerFocusValidation/DeadlinerUITests/FocusNativeUITests/testZHistoryAndStatisticsFlows"
+  }
+]

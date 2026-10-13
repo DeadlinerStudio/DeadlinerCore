@@ -10,7 +10,7 @@ import com.deadliner.sync.snapshot.SnapshotV3Validator
 import com.deadliner.sync.snapshot.v3.LegacySnapshotV3Migrator
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.*
 
 /**
  * Compatibility façade retained for the existing WebDAV and native bridges.
@@ -53,7 +53,16 @@ class ChangeLogSyncFacade(
         }
     }
 
-    private fun decodePayload(raw: String): ChangeLogSyncPayload {
+    private fun decodePayload(input: String): ChangeLogSyncPayload {
+        // V5 writers omitted default version fields; only V6 writers emit them explicitly.
+        val objectValue = json.parseToJsonElement(input) as? JsonObject ?: error("Invalid sync payload")
+        val snapshotObject = objectValue["snapshot"] as? JsonObject
+        val raw = JsonObject(objectValue + buildMap {
+            if ("formatVersion" !in objectValue) put("formatVersion", snapshotObject?.get("format_version") ?: JsonPrimitive(5))
+            if (snapshotObject != null && "format_version" !in snapshotObject) {
+                put("snapshot", JsonObject(snapshotObject + ("format_version" to (objectValue["formatVersion"] ?: JsonPrimitive(5)))))
+            }
+        }).toString()
         val currentFailure = runCatching {
             json.decodeFromString<ChangeLogSyncPayload>(raw).also(::requireCurrentFormat)
         }
@@ -123,12 +132,14 @@ class ChangeLogSyncFacade(
  */
 @Serializable
 data class ChangeLogSyncPayload(
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.ALWAYS)
     val formatVersion: Int = FORMAT_VERSION,
     val snapshot: SnapshotV3Root? = null,
     val changes: List<ChangeLogEntry> = emptyList(),
 ) {
     companion object {
-        const val FORMAT_VERSION = 5
+        const val FORMAT_VERSION = 6
     }
 }
 

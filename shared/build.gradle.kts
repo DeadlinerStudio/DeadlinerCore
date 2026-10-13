@@ -1,6 +1,7 @@
 import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
 import org.gradle.api.GradleException
 import org.gradle.api.tasks.Copy
+import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -119,6 +120,7 @@ android {
     compileSdk = 35
     defaultConfig {
         minSdk = 26
+        consumerProguardFiles("consumer-rules.pro")
     }
 }
 
@@ -134,7 +136,18 @@ kotlin {
             xcf.add(this)
         }
     }
-    macosArm64()
+    macosArm64 {
+        // Diagnostic arguments are opt-in; normal builds keep the toolchain defaults.
+        binaries.all {
+            linkTaskProvider.configure {
+                toolOptions.freeCompilerArgs.addAll(
+                    providers.gradleProperty("nativeStabilityDiagnosticArgs")
+                        .map { it.split(' ').filter(String::isNotBlank) }
+                        .orElse(emptyList()),
+                )
+            }
+        }
+    }
     val ohosSqliteStaticLibrariesDir = layout.buildDirectory.dir("intermediates/ohos-sqlite-static-libraries")
     val extractOhosSqliteStaticLibraries by tasks.registering(Copy::class) {
         from(providers.provider {
@@ -150,6 +163,15 @@ kotlin {
     }
 
     ohosArm64 {
+        val nativeSysroot = providers.gradleProperty("harmonyNativeSysroot")
+            .orElse(providers.environmentVariable("DEVECO_SDK_HOME").map {
+                "$it/default/openharmony/native/sysroot"
+            })
+            .orElse("/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/native/sysroot")
+        compilations.getByName("main").cinterops.create("mindspore") {
+            defFile(project.file("src/nativeInterop/cinterop/mindspore.def"))
+            compilerOpts("-I${nativeSysroot.get()}/usr/include")
+        }
         binaries.sharedLib {
             baseName = "DeadlinerCore"
             // CPF SQLiter ships SQLite as archives inside its CInterop KLIB. Extract
@@ -163,6 +185,8 @@ kotlin {
                 // NAPI libraries have no executable entry point, so alias it to a stable bridge
                 // export at link time instead of relying on the host ArkTS process.
                 "--defsym=main=deadliner_persistence_bridge_version",
+                "-L${nativeSysroot.get()}/usr/lib/aarch64-linux-ohos",
+                "-lmindspore_lite_ndk",
             )
             linkTaskProvider.configure {
                 dependsOn(extractOhosSqliteStaticLibraries)
@@ -172,6 +196,12 @@ kotlin {
     sourceSets {
         named("commonMain") {
             kotlin.srcDir(kmpBuildMetadataDirectory)
+        }
+        // The model cache uses the same real POSIX file implementation on Native targets.
+        configureEach {
+            if (name in setOf("iosMain", "macosArm64Main", "ohosArm64Main")) {
+                kotlin.srcDir("src/posixMain/kotlin")
+            }
         }
         commonMain.dependencies {
             implementation(libs.sqldelight.runtime)
@@ -184,6 +214,8 @@ kotlin {
             implementation(libs.ktor.client.core)
         }
         androidMain.dependencies {
+            // Host apps explicitly opt in to packaging the native runtime.
+            compileOnly(libs.onnxruntime.android)
             implementation(libs.sqldelight.android.driver)
             implementation(libs.androidx.core)
             implementation(libs.androidx.work.runtime)
@@ -223,6 +255,17 @@ kotlin {
             implementation(libs.kotlin.test)
         }
     }
+}
+
+// Preserve the original binary, test arguments, filters and link dependency.
+// Merge process streams instead of racing KGP's two readers into TestOutputStore.
+tasks.named<KotlinNativeTest>("macosArm64Test") {
+    dependsOn("linkDebugTestMacosArm64")
+    val nativeTestBinary = layout.buildDirectory.file("bin/macosArm64/debugTest/test.kexe")
+    environment("DEADLINER_NATIVE_TEST_EXECUTABLE", nativeTestBinary.get().asFile.absolutePath)
+    executableProperty.set(files(rootProject.file("runscript/native/run-test-stream.sh")))
+    inputs.file(nativeTestBinary).withPropertyName("nativeTestBinary")
+    inputs.file(rootProject.file("runscript/native/run-test-stream.sh"))
 }
 
 sqldelight {

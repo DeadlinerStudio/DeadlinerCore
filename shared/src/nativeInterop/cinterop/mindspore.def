@@ -1,0 +1,4 @@
+headers = mindspore/model.h mindspore/context.h mindspore/tensor.h
+headerFilter = mindspore/**
+package = com.deadliner.interop.mindspore
+linkerOpts = -lmindspore_lite_ndk

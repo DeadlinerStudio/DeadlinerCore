@@ -5,20 +5,20 @@
 - 产品：Deadliner
 - 功能：Task 专注计时与总时长
 - 版本：TRD v0.2
-- 状态：已冻结（Core 第一阶段）
+- 状态：已实现（Task-only MVP，待发布前真机 QA）
 - 初稿日期：2026-09-01
 - 更新日期：2026-09-10
 - 依赖：`prd.md`、`spec.md`、`module-plan.md`
 - 核心仓库：`~/Codes/ProjectDeadliner/DeadlinerCore`
-- Android：`~/Codes/ProjectDeadliner/Deadliner`
-- iOS：`~/Codes/ProjectDeadliner/Deadliner-iOS`
-- HarmonyOS：`~/Codes/ProjectDeadliner/DeadlinerNEXT`
+- Android：`~/Codes/Android/Deadliner`
+- iOS：`~/Codes/iOS/Deadliner`
+- HarmonyOS：`~/Codes/HarmonyOS/Deadliner`
 
 ## 1. 规格冻结时现状摘要
 
 - 冻结前 KMP 已有独立 `Task` 聚合、`TaskStateMachine`、SQLDelight repository、ChangeLog/WebDAV、Snapshot v4、DeadlinerServer 与 Backup 链路。
-- `TaskRepository` 是持久化 Task 状态迁移的权威，但当前 `applyAction` 不感知活动计时。
-- 当前没有专注会话、活动计时、统一计时状态机或计时通知端口。
+- `TaskRepository` 是持久化 Task 状态迁移的权威，但冻结前 `applyAction` 不感知活动计时。
+- 冻结前没有专注会话、活动计时、统一计时状态机或计时通知端口。
 - 冻结前 Snapshot 根合同为 `formatVersion = 4`，Server entity kind 尚无 `focus_session`；Core 第二批已升级为 Snapshot v5 并补齐该资源。
 - MVP 已收敛为 Task-only；Habit 不进入本轮合同、schema、同步或 bridge。
 

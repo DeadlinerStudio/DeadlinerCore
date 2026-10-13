@@ -12,6 +12,8 @@ import com.deadliner.domain.capture.CaptureSource
 import com.deadliner.domain.category.Category
 import com.deadliner.domain.category.CategoryMutation
 import com.deadliner.domain.focus.FocusCompletionKind
+import com.deadliner.domain.focus.FocusTargetRef
+import com.deadliner.domain.focus.FocusTargetKind
 import com.deadliner.domain.focus.FocusSession
 import com.deadliner.domain.focus.FocusTimerMode
 import com.deadliner.domain.habit.Habit
@@ -219,6 +221,10 @@ class SnapshotV3Store(
                 value.createdAt,
                 value.updatedAt,
                 0,
+                value.boundTarget.kind.name,
+                value.target?.takeIf { it.kind == FocusTargetKind.HABIT }?.uid,
+                value.habitOccurredOn,
+                value.habitRecordedAmount?.toLong(),
             )
             database.focusSessionQueries.updateSession(
                 value.taskUid,
@@ -231,6 +237,10 @@ class SnapshotV3Store(
                 value.completionKind.name,
                 value.updatedAt,
                 0,
+                value.boundTarget.kind.name,
+                value.target?.takeIf { it.kind == FocusTargetKind.HABIT }?.uid,
+                value.habitOccurredOn,
+                value.habitRecordedAmount?.toLong(),
                 value.uid,
             )
         }
@@ -338,7 +348,9 @@ class SnapshotV3Store(
     private fun capture(uid: String, text: String, source: String, createdAt: String, updatedAt: String, isConsumed: Long, isDeleted: Long) = CaptureItem(uid, text, CaptureSource.valueOf(source), createdAt, updatedAt, isConsumed.asBoolean(), isDeleted.asBoolean())
     private fun memory(uid: String, content: String, category: String, createdAt: String, importance: Long, updatedAt: String, isDeleted: Long) = MemoryFragment(uid, content, category, createdAt, importance.toInt(), updatedAt, isDeleted.asBoolean())
     private fun profile(uid: String, nickname: String, avatarFileName: String?, tier: String, createdAt: String, updatedAt: String, isDeleted: Long) = UserProfile(uid, nickname, avatarFileName, UserTier.valueOf(tier), createdAt, updatedAt, isDeleted.asBoolean())
-    private fun focusSession(uid: String, taskUid: String, taskTitleSnapshot: String, mode: String, plannedDurationSeconds: Long?, startedAt: String, endedAt: String, durationSeconds: Long, completionKind: String, createdAt: String, updatedAt: String, isDeleted: Long) = FocusSession(uid, taskUid, taskTitleSnapshot, FocusTimerMode.valueOf(mode), plannedDurationSeconds, startedAt, endedAt, durationSeconds, FocusCompletionKind.valueOf(completionKind), createdAt, updatedAt, isDeleted.asBoolean())
+    private fun focusSession(uid: String, taskUid: String, taskTitleSnapshot: String, mode: String, plannedDurationSeconds: Long?, startedAt: String, endedAt: String, durationSeconds: Long, completionKind: String, createdAt: String, updatedAt: String, isDeleted: Long, targetKind: String, habitUid: String?, habitOccurredOn: String?, habitRecordedAmount: Long?) =
+        FocusSession(uid, taskUid, taskTitleSnapshot, FocusTimerMode.valueOf(mode), plannedDurationSeconds, startedAt, endedAt, durationSeconds, FocusCompletionKind.valueOf(completionKind), createdAt, updatedAt, isDeleted.asBoolean(),
+            if (targetKind == "HABIT") FocusTargetRef(FocusTargetKind.HABIT, requireNotNull(habitUid)) else null, habitOccurredOn, habitRecordedAmount?.toInt())
     private fun String.toTaskState() = when (this) { "active" -> TaskState.ACTIVE; "completed" -> TaskState.COMPLETED; "archived" -> TaskState.ARCHIVED; "abandoned" -> TaskState.ABANDONED; "abandonedArchived" -> TaskState.ABANDONED_ARCHIVED; else -> error("Unknown persisted TaskState: $this") }
 
     private companion object {

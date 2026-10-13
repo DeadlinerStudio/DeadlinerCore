@@ -144,3 +144,20 @@ data class OverviewMonthlyMetrics(
     val previousCompletionRate: Double = 0.0,
     val previousOverdueTasks: Int = 0,
 )
+
+/** A selected local calendar month; archive counts are current inventory, not monthly flows. */
+@Serializable
+data class OverviewMonthUiState(
+    val monthStart: String,
+    val endDateExclusive: String,
+    val asOfDate: String,
+    val timeZoneId: String,
+    val completedCount: Int,
+    val daily: List<OverviewDailyStat>,
+    val review: OverviewLastMonth,
+    val archivedTaskCount: Int,
+    val archivedHabitCount: Int,
+    val statusDistribution: OverviewHistory = OverviewHistory(),
+) {
+    val archivedCount: Int get() = archivedTaskCount + archivedHabitCount
+}

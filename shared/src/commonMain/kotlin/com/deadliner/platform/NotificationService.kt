@@ -11,6 +11,9 @@ import kotlinx.datetime.DayOfWeek
  * - HarmonyOS: reminderAgentManager
  */
 interface NotificationGateway {
+    /** Optional fixed-rule metadata path; legacy native hosts retain their existing methods. */
+    fun applyNotificationMetadata(metadata: NotificationMetadata) {}
+
     // ===== 任务通知 =====
 
     /** 设置任务到期提醒 */

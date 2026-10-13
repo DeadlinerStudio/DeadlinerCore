@@ -24,7 +24,12 @@ object SnapshotV3Codec {
         return json.encodeToString(snapshot)
     }
 
-    fun decode(raw: String): SnapshotV3Root = json.decodeFromString<SnapshotV3Root>(raw).also {
+    fun decode(raw: String): SnapshotV3Root = json.decodeFromString<SnapshotV3Root>(raw).let {
+        if (it.formatVersion == 5) {
+            require(it.focusSessions.all { item -> item.doc?.boundTarget?.kind != com.deadliner.domain.focus.FocusTargetKind.HABIT }) { "V5 cannot contain Habit focus" }
+            it.copy(formatVersion = SnapshotV3Root.FORMAT_VERSION)
+        } else it
+    }.also {
         SnapshotV3Validator.requireValid(it)
     }
 }
@@ -37,7 +42,7 @@ object SnapshotV3Validator {
 
     fun validate(snapshot: SnapshotV3Root): List<SnapshotV3ValidationIssue> = buildList {
         if (snapshot.formatVersion != SnapshotV3Root.FORMAT_VERSION) {
-            add(SnapshotV3ValidationIssue("format_version", "expected format version 5"))
+            add(SnapshotV3ValidationIssue("format_version", "expected format version ${SnapshotV3Root.FORMAT_VERSION}"))
         }
         validateItems("categories", snapshot.categories, { it.uid }, { it.deleted }, { it.doc }, { it.uid })
         validateItems("tasks", snapshot.tasks, { it.uid }, { it.deleted }, { it.doc }, { it.uid })

@@ -20,6 +20,7 @@ actual class KtorLlmClient actual constructor(
     private val config: AIConfig,
 ) : LlmGateway {
     private val client = HttpClient {
+        expectSuccess = true
         install(ContentNegotiation) {
             json(Json { ignoreUnknownKeys = true; isLenient = true })
         }

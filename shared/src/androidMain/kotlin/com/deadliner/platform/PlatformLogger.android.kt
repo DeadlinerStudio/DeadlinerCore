@@ -33,6 +33,12 @@ actual object PlatformLogSink {
     private val sessionId = UUID.randomUUID().toString().lowercase()
     private var diagnosticsDirectory: File? = null
     private var processId: Long? = null
+    private var fileWriter: ((String, String) -> Unit)? = null
+
+    /** Android hosts can serialize Native/KMP writes and retention on one IO queue. */
+    fun configureFileWriter(writer: ((String, String) -> Unit)?) {
+        synchronized(lock) { fileWriter = writer }
+    }
 
     actual fun configure(directory: String, processId: Long?) {
         synchronized(lock) {
@@ -58,6 +64,10 @@ actual object PlatformLogSink {
     private fun writeToFiles(record: PlatformLogRecord) {
         val directory = diagnosticsDirectory ?: return
         runCatching {
+            fileWriter?.let { writer ->
+                writer(PlatformLogFormat.jsonLine(record), PlatformLogFormat.standardLine(record))
+                return
+            }
             File(directory, "deadliner-diagnostics.jsonl").appendText(PlatformLogFormat.jsonLine(record))
             File(directory, "deadliner-diagnostics.log").appendText(PlatformLogFormat.standardLine(record))
         }

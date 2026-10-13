@@ -2,6 +2,9 @@ package com.deadliner.service.focus
 
 import com.deadliner.db.AppDatabase
 import com.deadliner.db.repository.TaskRepository
+import com.deadliner.db.repository.HabitRepository
+import com.deadliner.domain.habit.Habit
+import com.deadliner.domain.focus.FocusTargetKind
 import com.deadliner.db.repository.focus.ActiveFocusTimerStore
 import com.deadliner.db.repository.focus.FocusSessionRepository
 import com.deadliner.domain.focus.ActiveFocusTimer
@@ -35,8 +38,10 @@ class FocusTimerService(
     private val activeTimers: ActiveFocusTimerStore,
     private val alarmPort: FocusAlarmPort = FocusAlarmPort.NONE,
     private val mutationNotifier: RepositoryMutationNotifier = RepositoryMutationNotifier.NONE,
+    habits: HabitRepository? = null,
 ) {
     private val commandMutex = Mutex()
+    private val habitOperations = habits?.let { HabitFocusOperations(database, it, sessions, activeTimers, mutationNotifier) }
 
     suspend fun execute(
         command: FocusTimerCommand,
@@ -44,6 +49,17 @@ class FocusTimerService(
     ): FocusTimerResult = commandMutex.withLock {
         when (command) {
             is FocusTimerCommand.Start -> start(command, now)
+            is FocusTimerCommand.StartHabit -> {
+                val result = habitOperations?.start(command, now) ?: FocusTimerResult(FocusTimerOutcome.HABIT_NOT_FOUND)
+                result.activeTimer?.let { resultForActive(result.outcome, it, now,
+                    warning = if (result.outcome == FocusTimerOutcome.APPLIED) scheduleAlarm(it) else null) } ?: result
+            }
+            is FocusTimerCommand.FinishAndRecordHabit -> {
+                val result = habitOperations?.finishAndRecord(command, now) ?: FocusTimerResult(FocusTimerOutcome.HABIT_NOT_FOUND)
+                val warning = if (result.outcome == FocusTimerOutcome.APPLIED) cancelAlarm(command.sessionUid) else null
+                result.activeTimer?.let { resultForActive(result.outcome, it, now, warning = warning)
+                    .copy(session = result.session) } ?: result.copy(warning = warning)
+            }
             FocusTimerCommand.Pause -> withTerminalReconciliation(now) { active -> pause(active, now) }
             FocusTimerCommand.Resume -> withTerminalReconciliation(now) { active -> resume(active, now) }
             FocusTimerCommand.Finish -> withTerminalReconciliation(now) { active ->
@@ -63,12 +79,32 @@ class FocusTimerService(
         resultForActive(FocusTimerOutcome.NO_OP, active, now)
     }
 
+    fun habitRecordContext(session: FocusSession, now: Instant = Clock.System.now()) =
+        session.takeIf { it.boundTarget.kind == FocusTargetKind.HABIT && it.habitRecordedAmount == null && !it.isDeleted }
+            ?.let { saved -> habitOperations?.contextForSession(saved, now) }
+
+    suspend fun resolveHabitChange(uid: String, delete: Boolean, now: Instant = Clock.System.now(), expectedSessionUid: String? = null): FocusTimerResult = commandMutex.withLock {
+        val confirmedActive = activeTimers.current()
+        if (expectedSessionUid != null && confirmedActive?.sessionUid != expectedSessionUid) {
+            return@withLock confirmedActive?.let { resultForActive(FocusTimerOutcome.INVALID_STATE, it, now) }
+                ?: FocusTimerResult(FocusTimerOutcome.INVALID_STATE)
+        }
+        val sessionUid = activeTimers.current()?.sessionUid
+        val result = habitOperations?.resolveChange(uid, delete, now) ?: FocusTimerResult(FocusTimerOutcome.HABIT_NOT_FOUND)
+        if (result.outcome == FocusTimerOutcome.APPLIED) {
+            mutationNotifier.notifyMutation()
+            result.copy(warning = sessionUid?.let(::cancelAlarm))
+        } else result
+    }
+
     suspend fun resolveTaskAction(
         taskUid: String,
         action: TaskAction,
         now: Instant = Clock.System.now(),
+        expectedSessionUid: String? = null,
     ): FocusTimerResult = commandMutex.withLock {
         val active = activeTimers.current() ?: return@withLock FocusTimerResult(FocusTimerOutcome.TIMER_NOT_FOUND)
+        if (expectedSessionUid != null && active.sessionUid != expectedSessionUid) return@withLock resultForActive(FocusTimerOutcome.INVALID_STATE, active, now)
         val task = tasks.find(taskUid) ?: return@withLock FocusTimerResult(FocusTimerOutcome.TASK_NOT_FOUND)
         if (active.taskUid != taskUid || !FocusTaskPolicy.requiresResolution(task, action, active)) {
             return@withLock resultForActive(FocusTimerOutcome.INVALID_STATE, active, now, task)
@@ -79,13 +115,37 @@ class FocusTimerService(
     suspend fun resolveTaskDeletion(
         taskUid: String,
         now: Instant = Clock.System.now(),
+        expectedSessionUid: String? = null,
     ): FocusTimerResult = commandMutex.withLock {
         val active = activeTimers.current() ?: return@withLock FocusTimerResult(FocusTimerOutcome.TIMER_NOT_FOUND)
+        if (expectedSessionUid != null && active.sessionUid != expectedSessionUid) return@withLock resultForActive(FocusTimerOutcome.INVALID_STATE, active, now)
         val task = tasks.find(taskUid) ?: return@withLock FocusTimerResult(FocusTimerOutcome.TASK_NOT_FOUND)
         if (!FocusTaskPolicy.requiresResolutionForDelete(taskUid, active)) {
             return@withLock resultForActive(FocusTimerOutcome.INVALID_STATE, active, now, task)
         }
         finishAndDeleteTask(active, task, now)
+    }
+
+    /** Completes only the saved session's Task. Never seals another/new timer or inserts a session. */
+    suspend fun completeSavedTask(sessionUid: String, now: Instant = Clock.System.now()): FocusTimerResult = commandMutex.withLock {
+        val active = activeTimers.current()
+        fun failure(outcome: FocusTimerOutcome, session: FocusSession? = null): FocusTimerResult =
+            active?.let { resultForActive(outcome, it, now).copy(session = session) } ?: FocusTimerResult(outcome, session = session)
+        val session = sessions.find(sessionUid)?.takeUnless { it.isDeleted }
+            ?: return@withLock failure(FocusTimerOutcome.TIMER_NOT_FOUND)
+        if (session.boundTarget.kind != FocusTargetKind.TASK) return@withLock failure(FocusTimerOutcome.INVALID_STATE)
+        if (active?.boundTarget == session.boundTarget) return@withLock resultForActive(FocusTimerOutcome.TIMER_REQUIRES_RESOLUTION, active, now)
+        val task = tasks.find(session.boundTarget.uid)?.takeUnless { it.isDeleted }
+            ?: return@withLock failure(FocusTimerOutcome.TASK_NOT_FOUND, session)
+        if (task.state == TaskState.COMPLETED || task.state == TaskState.ARCHIVED) {
+            return@withLock FocusTimerResult(FocusTimerOutcome.NO_OP, session = session, task = task, activeTimer = active,
+                snapshot = active?.let { resultForActive(FocusTimerOutcome.NO_OP, it, now).snapshot })
+        }
+        if (!task.canFocus()) return@withLock FocusTimerResult(FocusTimerOutcome.TASK_NOT_ACTIVE, session = session, activeTimer = active,
+            snapshot = active?.let { resultForActive(FocusTimerOutcome.NO_OP, it, now).snapshot })
+        val result = tasks.applyAction(task.uid, TaskAction.MARK_COMPLETE, now.toString())
+        return@withLock FocusTimerResult(if (result.outcome == TaskActionOutcome.APPLIED) FocusTimerOutcome.APPLIED else FocusTimerOutcome.INVALID_STATE,
+            session = session, task = result.task, activeTimer = active, snapshot = active?.let { resultForActive(FocusTimerOutcome.NO_OP, it, now).snapshot })
     }
 
     private fun start(command: FocusTimerCommand.Start, now: Instant): FocusTimerResult {
@@ -155,6 +215,15 @@ class FocusTimerService(
     }
 
     private fun resume(active: ActiveFocusTimer, now: Instant): FocusTimerResult {
+        if (active.boundTarget.kind == FocusTargetKind.HABIT) {
+            val transition = FocusTimerEngine.resume(active, now)
+            val updated = transition.activeTimer ?: active
+            val warning = if (transition.outcome == FocusTimerOutcome.APPLIED) {
+                activeTimers.save(updated)
+                scheduleAlarm(updated)
+            } else null
+            return resultForActive(transition.outcome, updated, now, warning = warning)
+        }
         val task = tasks.find(active.taskUid) ?: return FocusTimerResult(
             FocusTimerOutcome.TASK_NOT_FOUND,
             activeTimer = active,
@@ -185,6 +254,7 @@ class FocusTimerService(
         completeTask: Boolean,
     ): FocusTimerResult {
         if (completeTask) {
+            if (active.boundTarget.kind != FocusTargetKind.TASK) return resultForActive(FocusTimerOutcome.INVALID_STATE, active, now)
             return finishAndApplyTaskAction(
                 active,
                 now,
@@ -207,6 +277,7 @@ class FocusTimerService(
             session = session,
             task = task,
             warning = alarmWarning,
+            habit = habitOperations?.habit(active),
         )
     }
 
@@ -222,10 +293,10 @@ class FocusTimerService(
         }
         val completed = FocusTimerEngine.finish(active, now, completionKind)
         val session = completed.session
-            ?: return resultForActive(completed.outcome, active, now, task)
+        if (session == null && completed.outcome != FocusTimerOutcome.INVALID_DURATION) return resultForActive(completed.outcome, active, now, task)
         var updatedTask: Task? = task
         database.transaction {
-            sessions.saveInTransaction(session, ChangeOperation.INSERT)
+            session?.let { sessions.saveInTransaction(it, ChangeOperation.INSERT) }
             activeTimers.clear()
             val taskResult = tasks.applyActionInTransaction(active.taskUid, action, now.toString())
             check(taskResult.outcome == TaskActionOutcome.APPLIED) {
@@ -249,9 +320,9 @@ class FocusTimerService(
     ): FocusTimerResult {
         val completed = FocusTimerEngine.finish(active, now, FocusCompletionKind.FOCUS_AND_TASK_CHANGED)
         val session = completed.session
-            ?: return resultForActive(completed.outcome, active, now, task)
+        if (session == null && completed.outcome != FocusTimerOutcome.INVALID_DURATION) return resultForActive(completed.outcome, active, now, task)
         database.transaction {
-            sessions.saveInTransaction(session, ChangeOperation.INSERT)
+            session?.let { sessions.saveInTransaction(it, ChangeOperation.INSERT) }
             activeTimers.clear()
             tasks.deleteInTransaction(task.uid, now.toString())
         }
@@ -284,6 +355,11 @@ class FocusTimerService(
 
     private fun reconcile(now: Instant): FocusTimerResult {
         val active = activeTimers.current() ?: return FocusTimerResult(FocusTimerOutcome.NO_OP)
+        if (active.boundTarget.kind == FocusTargetKind.HABIT) {
+            val result = habitOperations?.reconcile(active, now) ?: return FocusTimerResult(FocusTimerOutcome.HABIT_NOT_FOUND)
+            val warning = if (result.activeTimer == null) cancelAlarm(active.sessionUid) else reconcileAlarm(active)
+            return result.copy(warning = warning, snapshot = result.snapshot?.copy(warning = warning))
+        }
         val task = tasks.find(active.taskUid)
         if (task == null || !task.canFocus()) {
             val completed = FocusTimerEngine.finish(active, now, FocusCompletionKind.TASK_BECAME_INACTIVE)
@@ -335,7 +411,8 @@ class FocusTimerService(
         val active = activeTimers.current() ?: return FocusTimerResult(FocusTimerOutcome.TIMER_NOT_FOUND)
         val task = tasks.find(active.taskUid)
         val calculation = FocusTimerEngine.calculate(active, now)
-        if (task == null || !task.canFocus() || calculation.countdownElapsed) return reconcile(now)
+        val targetIsActive = if (active.boundTarget.kind == FocusTargetKind.HABIT) habitOperations?.isActive(active) == true else task?.canFocus() == true
+        if (!targetIsActive || calculation.countdownElapsed) return reconcile(now)
         return operation(active)
     }
 
@@ -346,6 +423,10 @@ class FocusTimerService(
         resolvedTask: Task? = tasks.find(active.taskUid),
         warning: FocusTimerWarning? = null,
     ): FocusTimerResult {
+        if (active.boundTarget.kind == FocusTargetKind.HABIT) {
+            val result = habitOperations?.snapshot(outcome, active, now) ?: return FocusTimerResult(FocusTimerOutcome.HABIT_NOT_FOUND)
+            return result.copy(warning = warning, snapshot = result.snapshot?.copy(warning = warning))
+        }
         val taskIsActive = resolvedTask?.canFocus() == true
         val snapshot = FocusTimerEngine.snapshot(
             active,
@@ -394,4 +475,5 @@ data class FocusTimerResult(
     val session: FocusSession? = null,
     val task: Task? = null,
     val warning: FocusTimerWarning? = null,
+    val habit: Habit? = null,
 )

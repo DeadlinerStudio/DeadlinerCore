@@ -54,7 +54,7 @@ class NotificationOrchestratorTest {
             habits = listOf(enabled, disabled, archived),
         )
 
-        assertEquals(1, gateway.cancelAllCalls)
+        assertEquals(0, gateway.cancelAllCalls)
         assertEquals(listOf("task.ok"), gateway.taskSchedules.map { it.taskUid })
         assertEquals(listOf("enabled"), gateway.habitSchedules.map { it.habitUid })
         assertTrue(gateway.cancelledTaskUids.contains("task.none"))
@@ -104,6 +104,47 @@ class NotificationOrchestratorTest {
         assertEquals("2026-08-19T08:30", gateway.habitSchedules.last().scheduledLocalDateTimes.first())
     }
 
+    @Test
+    fun unifiedEntryDiffsPersistenceAndPreservesIndependentLiveSlots() {
+        val gateway = RecordingNotificationGateway()
+        var tasks = listOf(task("a", "2026-10-08T10:00:00Z"), task("b", "2026-10-08T11:00:00Z"))
+        val orchestrator = NotificationOrchestrator(gateway, tasksProvider = { tasks }, habitsProvider = { emptyList() })
+        orchestrator.triggerNotificationInfoUpdate()
+        orchestrator.onTaskUpdated(tasks.first())
+        assertEquals(2, gateway.taskSchedules.size)
+        assertEquals(listOf("a", "b"), gateway.liveSchedules.map { it.taskUid })
+        tasks = listOf(tasks.first().copy(title = "changed"))
+        orchestrator.triggerNotificationInfoUpdate()
+        assertEquals("changed", gateway.taskSchedules.last().title)
+        assertEquals(listOf("b"), gateway.cancelledTaskUids)
+        assertEquals(listOf("b"), gateway.cancelledLiveUids)
+        orchestrator.triggerNotificationInfoUpdate(force = true)
+        assertEquals(4, gateway.taskSchedules.size)
+        assertEquals(0, gateway.cancelAllCalls)
+        orchestrator.cancelAllNotifications()
+        orchestrator.triggerNotificationInfoUpdate()
+        assertEquals(5, gateway.taskSchedules.size)
+        assertEquals(1, gateway.cancelAllCalls)
+    }
+
+    @Test
+    fun refreshReadsHabitRecordsAndDeliveryRearmsUnchangedOccurrences() {
+        val gateway = RecordingNotificationGateway()
+        val habit = habit("h", HabitReminder("08:30"))
+        val records = listOf(com.deadliner.domain.habit.HabitRecord(
+            uid = "done", habitUid = "h", occurredOn = "2026-08-17", createdAt = NOW,
+        ))
+        val orchestrator = NotificationOrchestrator(gateway,
+            todayProvider = { LocalDate.parse("2026-08-17") },
+            tasksProvider = { emptyList() }, habitsProvider = { listOf(habit) }, recordsProvider = { records })
+        orchestrator.triggerNotificationInfoUpdate()
+        assertEquals("2026-08-18T08:30", gateway.habitSchedules.single().scheduledLocalDateTimes.first())
+        orchestrator.triggerNotificationInfoUpdate()
+        assertEquals(1, gateway.habitSchedules.size)
+        orchestrator.onHabitNotificationDelivered(habit)
+        assertEquals(2, gateway.habitSchedules.size)
+    }
+
     private fun task(
         uid: String,
         dueAt: String? = null,
@@ -127,6 +168,8 @@ private class RecordingNotificationGateway : NotificationGateway {
     val habitSchedules = mutableListOf<HabitNotificationConfig>()
     val cancelledTaskUids = mutableListOf<String>()
     val cancelledHabitUids = mutableListOf<String>()
+    val liveSchedules = mutableListOf<UpcomingLiveUpdateConfig>()
+    val cancelledLiveUids = mutableListOf<String>()
     var cancelAllCalls = 0
 
     override fun setTaskNotification(config: TaskNotificationConfig) { taskSchedules += config }
@@ -137,8 +180,8 @@ private class RecordingNotificationGateway : NotificationGateway {
     override fun cancelAllHabitNotifications() = Unit
     override fun setDailySummaryNotification(config: DailySummaryConfig) = Unit
     override fun cancelDailySummaryNotification() = Unit
-    override fun setUpcomingLiveUpdate(config: UpcomingLiveUpdateConfig) = Unit
-    override fun cancelUpcomingLiveUpdate(taskUid: String) = Unit
+    override fun setUpcomingLiveUpdate(config: UpcomingLiveUpdateConfig) { liveSchedules += config }
+    override fun cancelUpcomingLiveUpdate(taskUid: String) { cancelledLiveUids += taskUid }
     override fun cancelAll() { cancelAllCalls += 1 }
     override fun refreshAll(tasks: List<TaskNotificationInfo>, habits: List<HabitNotificationInfo>) = Unit
 }

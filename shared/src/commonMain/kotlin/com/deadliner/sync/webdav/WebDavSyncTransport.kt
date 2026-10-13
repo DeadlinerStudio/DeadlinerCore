@@ -2,7 +2,7 @@ package com.deadliner.sync.webdav
 
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
-import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.header
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
@@ -50,12 +50,7 @@ data class WebDavTransportConfiguration(
 @OptIn(ExperimentalEncodingApi::class)
 class WebDavSyncTransport(
     private val configuration: WebDavTransportConfiguration,
-    private val client: HttpClient = HttpClient {
-        expectSuccess = false
-        install(HttpTimeout) {
-            requestTimeoutMillis = configuration.requestTimeoutMillis
-        }
-    },
+    private val client: HttpClient = sharedClient,
 ) : SyncBlobTransport {
     override suspend fun read(path: String): SyncBlob? {
         val head = request(path, HttpMethod.Head)
@@ -106,9 +101,13 @@ class WebDavSyncTransport(
         return create.status.value in CREATED_COLLECTION_STATUS_CODES
     }
 
-    override fun close() {
-        client.close()
-    }
+    /**
+     * The Curl engine owns a multi handle on Kotlin/Native. Closing a per-sync
+     * client while its worker is unwinding can leave that multi handle with an
+     * already-released easy handle on HarmonyOS. Keep the default client
+     * process-scoped instead; injected clients remain caller-owned as well.
+     */
+    override fun close() = Unit
 
     private suspend fun ensureParentCollections(filePath: String): Boolean {
         val parent = normalizeFilePath(filePath).substringBeforeLast('/', missingDelimiterValue = "")
@@ -127,6 +126,9 @@ class WebDavSyncTransport(
         headers: Map<String, String> = emptyMap(),
         configure: io.ktor.client.request.HttpRequestBuilder.() -> Unit = {},
     ): io.ktor.client.statement.HttpResponse = client.request(joinUrl(path)) {
+        timeout {
+            requestTimeoutMillis = configuration.requestTimeoutMillis
+        }
         this.method = method
         basicAuthorizationHeader()?.let { header(HttpHeaders.Authorization, it) }
         headers.forEach { (name, value) -> header(name, value) }
@@ -152,6 +154,13 @@ class WebDavSyncTransport(
     }
 
     private companion object {
+        /**
+         * A shared client avoids repeatedly constructing and closing Curl
+         * multi handles for WebDAV's short request sequences.
+         */
+        val sharedClient: HttpClient = HttpClient {
+            expectSuccess = false
+        }
         val MISSING_STATUS_CODES = setOf(404, 409, 410)
         val EXISTING_COLLECTION_STATUS_CODES = setOf(200, 207, 301, 302)
         val CREATED_COLLECTION_STATUS_CODES = setOf(201, 405, 409)

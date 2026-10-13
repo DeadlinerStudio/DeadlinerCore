@@ -75,7 +75,11 @@ CREATE TABLE focus_session (
     completion_kind TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    is_deleted INTEGER NOT NULL DEFAULT 0
+    is_deleted INTEGER NOT NULL DEFAULT 0,
+    target_kind TEXT NOT NULL DEFAULT 'TASK',
+    habit_uid TEXT,
+    habit_occurred_on TEXT,
+    habit_recorded_amount INTEGER
 );
 
 CREATE TABLE active_focus_timer (
@@ -89,7 +93,10 @@ CREATE TABLE active_focus_timer (
     started_at TEXT NOT NULL,
     running_segment_started_at TEXT,
     accumulated_seconds INTEGER NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    target_kind TEXT NOT NULL DEFAULT 'TASK',
+    habit_uid TEXT,
+    habit_occurred_on TEXT
 );
 
 CREATE TABLE habit_record (
@@ -191,3 +198,5 @@ CREATE INDEX idx_legacy_v2_version_kind ON legacy_v2_version(entity_kind);
 
 enableForeignKeys:
 PRAGMA foreign_keys = 1;
+
+CREATE INDEX idx_focus_session_habit ON focus_session(is_deleted, target_kind, habit_uid, started_at);

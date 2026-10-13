@@ -4,6 +4,8 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import java.time.Instant
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.OffsetDateTime
@@ -11,17 +13,19 @@ import java.time.ZoneId
 
 /** Android scheduling boundary. Notification content and actions remain app-owned. */
 actual class NotificationService(private val context: Context) : NotificationGateway {
+    private val logger = PlatformLogger()
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
     private val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
     actual override fun setTaskNotification(config: TaskNotificationConfig) {
         cancelTaskNotification(config.taskUid)
-        val dueMillis = parseDateTime(config.dueAt)?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli() ?: return
+        val dueMillis = parseInstant(config.dueAt)?.toEpochMilli() ?: run { logger.w("notification.alarm.skipped", "uid=${config.taskUid} reason=invalid_due"); return }
         val triggerMillis = dueMillis - config.reminderMinutes * 60_000L
-        if (triggerMillis <= System.currentTimeMillis()) return
+        if (triggerMillis <= System.currentTimeMillis()) { logger.i("notification.alarm.skipped", "uid=${config.taskUid} kind=task reason=reminder_in_past triggerAt=$triggerMillis dueAt=$dueMillis"); return }
         val intent = Intent(ACTION_TASK).setPackage(context.packageName)
             .putExtra(EXTRA_UID, config.taskUid)
             .putExtra(EXTRA_TITLE, config.title)
+            .putExtra(EXTRA_DUE_AT, config.dueAt)
         schedule(config.taskUid, TASK_REQUEST_OFFSET, triggerMillis, intent)
         remember(TASK_KEYS, config.taskUid)
     }
@@ -39,7 +43,7 @@ actual class NotificationService(private val context: Context) : NotificationGat
         val concreteTrigger = config.scheduledLocalDateTimes.asSequence()
             .mapNotNull(::parseDateTime)
             .firstOrNull { it.isAfter(now) }
-        if (config.isScheduleAuthoritative && concreteTrigger == null) return
+        if (config.isScheduleAuthoritative && concreteTrigger == null) { logger.i("notification.alarm.skipped", "uid=${config.habitUid} kind=habit reason=no_future_occurrence"); return }
         val trigger = concreteTrigger ?: run {
                 val time = runCatching { LocalTime.parse(config.alarmTime) }.getOrNull() ?: return
                 var fallback = now.toLocalDate().atTime(time)
@@ -84,9 +88,9 @@ actual class NotificationService(private val context: Context) : NotificationGat
     }
     actual override fun setUpcomingLiveUpdate(config: UpcomingLiveUpdateConfig) {
         cancelUpcomingLiveUpdate(config.taskUid)
-        val dueMillis = parseDateTime(config.dueAt)?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli() ?: return
+        val dueMillis = parseInstant(config.dueAt)?.toEpochMilli() ?: run { logger.w("notification.alarm.skipped", "uid=${config.taskUid} reason=invalid_due"); return }
         val triggerMillis = dueMillis - config.advanceMinutes * 60_000L
-        if (dueMillis <= System.currentTimeMillis()) return
+        if (dueMillis <= System.currentTimeMillis()) { logger.i("notification.alarm.skipped", "uid=${config.taskUid} kind=live reason=overdue dueAt=$dueMillis"); return }
         val intent = Intent(ACTION_LIVE).setPackage(context.packageName)
             .putExtra(EXTRA_UID, config.taskUid)
             .putExtra(EXTRA_TITLE, config.title)
@@ -119,26 +123,33 @@ actual class NotificationService(private val context: Context) : NotificationGat
     }
 
     private fun schedule(uid: String, offset: Int, triggerMillis: Long, intent: Intent) {
+        intent.putExtra(EXTRA_TRIGGER_MILLIS, triggerMillis)
+        intent.data = identity(uid, intent.action.orEmpty())
         val pending = PendingIntent.getBroadcast(
             context,
             offset + uid.hashCode(),
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        if (alarmManager.canScheduleExactAlarms()) {
+        val exact = alarmManager.canScheduleExactAlarms()
+        logger.i("notification.alarm.schedule", "uid=$uid action=${intent.action} triggerAt=$triggerMillis now=${System.currentTimeMillis()} exact=$exact identity=${intent.data}")
+        if (exact) {
             alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerMillis, pending)
         } else {
             alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerMillis, pending)
         }
+        logger.i("notification.alarm.scheduled", "uid=$uid action=${intent.action} triggerAt=$triggerMillis exact=$exact")
     }
 
     private fun cancel(uid: String, offset: Int, intent: Intent) {
-        PendingIntent.getBroadcast(
-            context,
-            offset + uid.hashCode(),
-            intent,
-            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
-        )?.let { pending -> alarmManager.cancel(pending); pending.cancel() }
+        logger.i("notification.alarm.cancel", "uid=$uid action=${intent.action}")
+        // Also retire schedules made before URI identities were introduced.
+        listOf(intent, Intent(intent).setData(identity(uid, intent.action.orEmpty()))).forEach { candidate ->
+            PendingIntent.getBroadcast(
+                context, offset + uid.hashCode(), candidate,
+                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+            )?.let { pending -> alarmManager.cancel(pending); pending.cancel() }
+        }
     }
 
     private fun remember(key: String, uid: String) {
@@ -153,6 +164,15 @@ actual class NotificationService(private val context: Context) : NotificationGat
         preferences.getStringSet(key, emptySet()).orEmpty().toList().forEach(cancelOne)
     }
 
+    private fun identity(uid: String, action: String): Uri = Uri.Builder()
+        .scheme("deadliner-notification").authority(context.packageName)
+        .appendPath(action).appendPath(uid).build()
+
+    private fun parseInstant(raw: String): Instant? =
+        runCatching { Instant.parse(raw) }.getOrNull()
+            ?: runCatching { OffsetDateTime.parse(raw).toInstant() }.getOrNull()
+            ?: runCatching { LocalDateTime.parse(raw).atZone(ZoneId.systemDefault()).toInstant() }.getOrNull()
+
     private fun parseDateTime(raw: String): LocalDateTime? =
         runCatching { LocalDateTime.parse(raw) }.getOrNull()
             ?: runCatching { OffsetDateTime.parse(raw).toLocalDateTime() }.getOrNull()
@@ -162,6 +182,7 @@ actual class NotificationService(private val context: Context) : NotificationGat
         const val ACTION_HABIT = "com.deadliner.kmp.notification.HABIT"
         const val ACTION_DAILY = "com.deadliner.kmp.notification.DAILY"
         const val ACTION_LIVE = "com.deadliner.kmp.notification.LIVE"
+        const val EXTRA_TRIGGER_MILLIS = "com.deadliner.kmp.notification.TRIGGER_MILLIS"
         const val EXTRA_UID = "com.deadliner.kmp.notification.UID"
         const val EXTRA_TITLE = "com.deadliner.kmp.notification.TITLE"
         const val EXTRA_DUE_AT = "com.deadliner.kmp.notification.DUE_AT"

@@ -1,0 +1,427 @@
+*** Begin Patch
+*** Add File: app/src/main/java/com/aritxonly/deadliner/ui/overview/FocusOverviewState.kt
++package com.aritxonly.deadliner.ui.overview
++
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.State
++import androidx.compose.runtime.produceState
++import androidx.lifecycle.Lifecycle
++import androidx.lifecycle.compose.LocalLifecycleOwner
++import androidx.lifecycle.repeatOnLifecycle
++import com.aritxonly.deadliner.platform.kmp.KmpV6Runtime
++import com.deadliner.domain.statistics.FocusOverviewStatistics
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.cancelAndJoin
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.flow.collect
++import kotlinx.coroutines.launch
++import java.time.LocalDate
++import java.time.ZoneId
++
++data class FocusOverviewState(
++    val data: FocusOverviewStatistics? = null,
++    val isLoading: Boolean = true,
++    val hasError: Boolean = false,
++)
++
++/** One subscription for all three tabs, stopped with the page lifecycle. */
++@Composable
++internal fun rememberFocusOverviewState(): State<FocusOverviewState> {
++    val owner = LocalLifecycleOwner.current
++    return produceState(FocusOverviewState(), owner) {
++        owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
++            var date = LocalDate.now()
++            var zone = ZoneId.systemDefault()
++            while (true) {
++                val collector = launch {
++                    try {
++                        KmpV6Runtime.database.focusStatistics.observeOverview().collect {
++                            value = FocusOverviewState(data = it, isLoading = false)
++                        }
++                    } catch (error: Exception) {
++                        if (error is CancellationException) throw error
++                        value = value.copy(isLoading = false, hasError = true)
++                    }
++                }
++                // Resubscribe after midnight so date projections also update without a mutation.
++                while (LocalDate.now() == date && ZoneId.systemDefault() == zone) delay(30_000)
++                collector.cancelAndJoin()
++                date = LocalDate.now()
++                zone = ZoneId.systemDefault()
++            }
++        }
++    }
++}
+*** Add File: app/src/main/java/com/aritxonly/deadliner/ui/overview/FocusStatisticsCards.kt
++package com.aritxonly.deadliner.ui.overview
++
++import androidx.compose.foundation.background
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.ColumnScope
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material3.Card
++import androidx.compose.material3.CardDefaults
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.res.dimensionResource
++import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.semantics.contentDescription
++import androidx.compose.ui.semantics.semantics
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.Dp
++import androidx.compose.ui.unit.dp
++import com.aritxonly.deadliner.R
++import com.deadliner.domain.statistics.FocusDurationPoint
++import com.deadliner.domain.statistics.FocusStatisticsSnapshot
++import kotlin.math.abs
++import java.util.Locale
++
++/** Uses the existing Overview card/theme conventions below the page's glass chrome. */
++@Composable
++internal fun FocusOverviewCards(state: FocusOverviewState) {
++    val data = state.data
++    if (data == null) {
++        FocusStatusCard(state)
++        return
++    }
++    FocusStatisticsCard(stringResource(R.string.focus_stats_summary)) {
++        if (state.hasError) Text(stringResource(R.string.focus_stats_error), color = MaterialTheme.colorScheme.error)
++        FocusMetricGrid(listOf(
++            stringResource(R.string.focus_stats_today) to focusDuration(data.today.totalDurationSeconds),
++            stringResource(R.string.focus_stats_week) to focusDuration(data.thisWeek.totalDurationSeconds),
++            stringResource(R.string.focus_stats_month) to focusDuration(data.thisMonth.summary.totalDurationSeconds),
++            stringResource(R.string.focus_stats_all_time) to focusDuration(data.allTime.totalDurationSeconds),
++        ))
++        Text(stringResource(R.string.focus_stats_month_details,
++            data.thisMonth.summary.sessionCount, data.thisMonth.summary.activeDayCount),
++            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
++        Text(stringResource(R.string.focus_stats_recorded_only),
++            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
++    }
++    FocusDistributionCard(data.thisMonth, stringResource(R.string.focus_stats_month_distribution))
++}
++
++@Composable
++internal fun FocusTrendCards(state: FocusOverviewState) {
++    val data = state.data
++    if (data == null) {
++        FocusStatusCard(state)
++        return
++    }
++    FocusDurationChartCard(stringResource(R.string.focus_stats_daily), data.daily)
++    FocusDurationChartCard(stringResource(R.string.focus_stats_weekly), data.weekly)
++    FocusDurationChartCard(stringResource(R.string.focus_stats_monthly), data.monthly, monthLabels = true)
++}
++
++@Composable
++internal fun FocusLastMonthCards(state: FocusOverviewState) {
++    val review = state.data?.lastMonth
++    if (review == null) {
++        FocusStatusCard(state, horizontalPadding = 0.dp)
++        return
++    }
++    val summary = review.current.summary
++    FocusStatisticsCard(stringResource(R.string.focus_stats_last_month), horizontalPadding = 0.dp) {
++        if (state.hasError) Text(stringResource(R.string.focus_stats_error), color = MaterialTheme.colorScheme.error)
++        FocusMetricGrid(listOf(
++            stringResource(R.string.focus_stats_duration) to focusDuration(summary.totalDurationSeconds),
++            stringResource(R.string.focus_stats_sessions) to summary.sessionCount.toString(),
++            stringResource(R.string.focus_stats_average) to focusDuration(summary.averageSessionDurationSeconds),
++            stringResource(R.string.focus_stats_days) to summary.activeDayCount.toString(),
++        ))
++        val percent = review.durationChangePercent
++        val change = when {
++            percent != null -> stringResource(R.string.focus_stats_comparison,
++                if (review.durationChangeSeconds >= 0) "+" else "−",
++                focusDuration(abs(review.durationChangeSeconds)),
++                String.format(Locale.getDefault(), "%+.1f%%", percent))
++            summary.totalDurationSeconds > 0 -> stringResource(R.string.focus_stats_first_month)
++            else -> stringResource(R.string.focus_stats_both_months_empty)
++        }
++        Text(change, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
++    }
++    FocusDurationChartCard(stringResource(R.string.focus_stats_last_month_daily), review.current.daily,
++        horizontalPadding = 0.dp, dayOfMonthLabels = true)
++    FocusDistributionCard(review.current, stringResource(R.string.focus_stats_last_month_distribution), horizontalPadding = 0.dp)
++}
++
++@Composable
++private fun FocusStatusCard(state: FocusOverviewState, horizontalPadding: Dp = 16.dp) {
++    FocusStatisticsCard(stringResource(R.string.focus_stats_summary), horizontalPadding) {
++        Text(stringResource(when {
++            state.hasError -> R.string.focus_stats_error
++            state.isLoading -> R.string.focus_stats_loading
++            else -> R.string.focus_stats_empty
++        }), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
++    }
++}
++
++@Composable
++private fun FocusMetricGrid(metrics: List<Pair<String, String>>) {
++    metrics.chunked(2).forEach { pair ->
++        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
++            pair.forEach { (label, value) ->
++                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
++                    Text(label, style = MaterialTheme.typography.bodyMedium,
++                        color = MaterialTheme.colorScheme.onSurfaceVariant)
++                    Text(value, style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Medium),
++                        color = rememberOverviewIndicatorPalette().total)
++                }
++            }
++        }
++    }
++}
++
++@Composable
++private fun FocusDurationChartCard(
++    title: String,
++    points: List<FocusDurationPoint>,
++    horizontalPadding: Dp = 16.dp,
++    monthLabels: Boolean = false,
++    dayOfMonthLabels: Boolean = false,
++) {
++    val total = points.sumOf { it.durationSeconds }
++    val maximum = points.maxOfOrNull { it.durationSeconds }?.coerceAtLeast(1) ?: 1
++    val color = rememberOverviewIndicatorPalette().total
++    FocusStatisticsCard(title, horizontalPadding) {
++        Text(focusDuration(total), style = MaterialTheme.typography.titleLarge,
++            color = color, fontWeight = FontWeight.Medium)
++        if (points.isNotEmpty()) Text(points.first().startDate + " — " + points.last().endDateExclusive,
++            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
++        if (total == 0L) {
++            Text(stringResource(R.string.focus_stats_empty), style = MaterialTheme.typography.bodyMedium,
++                color = MaterialTheme.colorScheme.onSurfaceVariant)
++        }
++        // Compact daily/monthly bars; no count-based chart is reused for durations.
++        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(3.dp),
++            verticalAlignment = Alignment.Bottom) {
++            points.forEachIndexed { index, point ->
++                val description = point.startDate + ": " + focusDuration(point.durationSeconds)
++                Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = description },
++                    horizontalAlignment = Alignment.CenterHorizontally) {
++                    Box(Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.BottomCenter) {
++                        Box(Modifier.fillMaxWidth(0.72f)
++                            .height((point.durationSeconds.toDouble() / maximum * 96).toFloat().coerceAtLeast(2f).dp)
++                            .clip(RoundedCornerShape(4.dp))
++                            .background(if (point.durationSeconds > 0) color else color.copy(alpha = 0.12f)))
++                    }
++                    val label = when {
++                        monthLabels -> point.startDate.substring(5, 7)
++                        dayOfMonthLabels -> if (index == 0 || (index + 1) % 5 == 0 || index == points.lastIndex)
++                            (index + 1).toString() else ""
++                        else -> point.startDate.substring(5)
++                    }
++                    Text(label, style = MaterialTheme.typography.labelSmall,
++                        maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
++                }
++            }
++        }
++        Text(stringResource(R.string.focus_stats_chart_scale, focusDuration(maximum.takeIf { total > 0 } ?: 0)),
++            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
++    }
++}
++
++@Composable
++private fun FocusDistributionCard(
++    snapshot: FocusStatisticsSnapshot,
++    title: String,
++    horizontalPadding: Dp = 16.dp,
++) {
++    FocusStatisticsCard(title, horizontalPadding) {
++        if (snapshot.summary.sessionCount == 0) {
++            Text(stringResource(R.string.focus_stats_empty), style = MaterialTheme.typography.bodyMedium,
++                color = MaterialTheme.colorScheme.onSurfaceVariant)
++        } else {
++            Text(stringResource(R.string.focus_stats_top_tasks), style = MaterialTheme.typography.titleMedium)
++            snapshot.tasks.take(5).forEach { task ->
++                FocusDistributionRow(task.taskTitle, task.durationSeconds, snapshot.summary.totalDurationSeconds)
++            }
++            Spacer(Modifier.height(4.dp))
++            Text(stringResource(R.string.focus_stats_categories), style = MaterialTheme.typography.titleMedium)
++            snapshot.categories.take(5).forEach { category ->
++                FocusDistributionRow(category.categoryTitle ?: stringResource(R.string.focus_stats_uncategorized),
++                    category.durationSeconds, snapshot.summary.totalDurationSeconds)
++            }
++            Text(stringResource(R.string.focus_stats_current_category),
++                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
++        }
++    }
++}
++
++@Composable
++private fun FocusDistributionRow(title: String, seconds: Long, total: Long) {
++    val fraction = (seconds.toDouble() / total.coerceAtLeast(1)).toFloat().coerceIn(0f, 1f)
++    val color = rememberOverviewIndicatorPalette().total
++    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
++        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
++            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
++                maxLines = 2, overflow = TextOverflow.Ellipsis)
++            Text(focusDuration(seconds), style = MaterialTheme.typography.bodyMedium, color = color)
++        }
++        Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(color.copy(alpha = 0.12f))) {
++            Box(Modifier.fillMaxWidth(fraction).height(4.dp).background(color))
++        }
++    }
++}
++
++@Composable
++private fun FocusStatisticsCard(title: String, horizontalPadding: Dp = 16.dp, content: @Composable ColumnScope.() -> Unit) {
++    Card(
++        modifier = Modifier.padding(horizontal = horizontalPadding, vertical = 8.dp).fillMaxWidth(),
++        shape = RoundedCornerShape(dimensionResource(R.dimen.item_corner_radius)),
++        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
++    ) {
++        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
++            Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
++            content()
++        }
++    }
++}
++
++@Composable
++private fun focusDuration(seconds: Long): String = when {
++    seconds < 60 -> stringResource(R.string.focus_stats_seconds, seconds)
++    seconds < 3_600 -> stringResource(R.string.focus_stats_minutes, seconds / 60)
++    else -> stringResource(R.string.focus_stats_hours_minutes, seconds / 3_600, seconds % 3_600 / 60)
++}
+*** Update File: app/src/main/java/com/aritxonly/deadliner/OverviewActivity.kt
+@@
+ import com.aritxonly.deadliner.ui.overview.KmpOverviewPresenter
++import com.aritxonly.deadliner.ui.overview.rememberFocusOverviewState
+@@
+ fun OverviewContent(
+@@
+ ) {
++    val focusState by rememberFocusOverviewState()
+     val snapshot = remember(overviewState) {
+@@
+             OverviewStatsScreen(
++                focusState = focusState,
+@@
+             TrendAnalysisScreen(
++                focusState = focusState,
+@@
+             DashboardScreen(
++                focusState = focusState,
+@@
+             0 -> OverviewStatsScreen(
++                focusState = focusState,
+@@
+             1 -> TrendAnalysisScreen(
++                focusState = focusState,
+@@
+             else -> DashboardScreen(
++                focusState = focusState,
+*** Update File: app/src/main/java/com/aritxonly/deadliner/ui/overview/OverviewStatsScreen.kt
+@@
+     listState: LazyListState,
++    focusState: FocusOverviewState = FocusOverviewState(),
+ ) {
+@@
+     ) {
++        item(key = "focus-overview") { FocusOverviewCards(focusState) }
+         itemsIndexed(overviewItems) { index, itemContent ->
+*** Update File: app/src/main/java/com/aritxonly/deadliner/ui/overview/TrendAnalysisScreen.kt
+@@
+     listState: LazyListState,
++    focusState: FocusOverviewState = FocusOverviewState(),
+ ) {
+@@
+     ) {
++        item(key = "focus-trends") { FocusTrendCards(focusState) }
+         itemsIndexed(trendItems) { index, itemComposable ->
+*** Update File: app/src/main/java/com/aritxonly/deadliner/ui/overview/DashboardScreen.kt
+@@
+     transparentBackground: Boolean = false,
++    focusState: FocusOverviewState = FocusOverviewState(),
+ ) {
+@@
+         item {
+             DashboardHeaderSection(monthName = snapshot.lastMonthName)
+         }
++        item(key = "focus-last-month") { FocusLastMonthCards(focusState) }
+*** Update File: app/src/main/res/values/strings.xml
+@@
+-</resources>
++    <string name="focus_stats_summary">专注时间</string>
++    <string name="focus_stats_today">今日专注</string>
++    <string name="focus_stats_week">本周专注</string>
++    <string name="focus_stats_month">本月专注</string>
++    <string name="focus_stats_all_time">累计专注</string>
++    <string name="focus_stats_month_details">本月 %1$d 次专注 · %2$d 个专注日</string>
++    <string name="focus_stats_recorded_only">仅统计已结束的专注会话</string>
++    <string name="focus_stats_month_distribution">本月专注分布</string>
++    <string name="focus_stats_daily">近 7 天专注时间</string>
++    <string name="focus_stats_weekly">近 4 周专注时间</string>
++    <string name="focus_stats_monthly">近 12 个月专注时间</string>
++    <string name="focus_stats_last_month">上月专注回顾</string>
++    <string name="focus_stats_duration">专注总时长</string>
++    <string name="focus_stats_sessions">专注次数</string>
++    <string name="focus_stats_average">平均单次时长</string>
++    <string name="focus_stats_days">专注天数</string>
++    <string name="focus_stats_comparison">较前月 %1$s%2$s（%3$s）</string>
++    <string name="focus_stats_first_month">前月没有专注记录，上月开始有记录</string>
++    <string name="focus_stats_both_months_empty">上月与前月均没有专注记录</string>
++    <string name="focus_stats_last_month_daily">上月每日专注时间</string>
++    <string name="focus_stats_last_month_distribution">上月专注分布</string>
++    <string name="focus_stats_error">专注统计加载失败，重新进入页面可重试</string>
++    <string name="focus_stats_loading">正在加载专注记录…</string>
++    <string name="focus_stats_empty">这个时段还没有专注记录</string>
++    <string name="focus_stats_chart_scale">图表满刻度 %1$s</string>
++    <string name="focus_stats_top_tasks">投入最多的任务 · 前 5 项</string>
++    <string name="focus_stats_categories">分类时间分布 · 前 5 项</string>
++    <string name="focus_stats_uncategorized">未分类</string>
++    <string name="focus_stats_current_category">按任务当前分类统计；历史记录不会因任务删除而丢失</string>
++    <string name="focus_stats_seconds">%1$d 秒</string>
++    <string name="focus_stats_minutes">%1$d 分钟</string>
++    <string name="focus_stats_hours_minutes">%1$d 小时 %2$d 分钟</string>
++</resources>
+*** Update File: app/src/main/res/values-en/strings.xml
+@@
+-</resources>
++    <string name="focus_stats_summary">Focus time</string>
++    <string name="focus_stats_today">Today</string>
++    <string name="focus_stats_week">This week</string>
++    <string name="focus_stats_month">This month</string>
++    <string name="focus_stats_all_time">All time</string>
++    <string name="focus_stats_month_details">This month: %1$d sessions · %2$d focus days</string>
++    <string name="focus_stats_recorded_only">Only finished focus sessions are included</string>
++    <string name="focus_stats_month_distribution">Focus distribution this month</string>
++    <string name="focus_stats_daily">Focus time · Last 7 days</string>
++    <string name="focus_stats_weekly">Focus time · Last 4 weeks</string>
++    <string name="focus_stats_monthly">Focus time · Last 12 months</string>
++    <string name="focus_stats_last_month">Last month in focus</string>
++    <string name="focus_stats_duration">Total focus time</string>
++    <string name="focus_stats_sessions">Sessions</string>
++    <string name="focus_stats_average">Average session</string>
++    <string name="focus_stats_days">Focus days</string>
++    <string name="focus_stats_comparison">Compared to the prior month: %1$s%2$s (%3$s)</string>
++    <string name="focus_stats_first_month">No sessions in the prior month; last month had the first records</string>
++    <string name="focus_stats_both_months_empty">No focus sessions in either month</string>
++    <string name="focus_stats_last_month_daily">Daily focus time last month</string>
++    <string name="focus_stats_last_month_distribution">Focus distribution last month</string>
++    <string name="focus_stats_error">Could not load focus statistics. Reopen this page to retry.</string>
++    <string name="focus_stats_loading">Loading focus records…</string>
++    <string name="focus_stats_empty">No focus sessions in this period</string>
++    <string name="focus_stats_chart_scale">Chart maximum: %1$s</string>
++    <string name="focus_stats_top_tasks">Tasks with the most focus · Top 5</string>
++    <string name="focus_stats_categories">Focus by category · Top 5</string>
++    <string name="focus_stats_uncategorized">Uncategorized</string>
++    <string name="focus_stats_current_category">Uses current task categories. Deleting a task preserves its focus history.</string>
++    <string name="focus_stats_seconds">%1$d s</string>
++    <string name="focus_stats_minutes">%1$d min</string>
++    <string name="focus_stats_hours_minutes">%1$d h %2$d min</string>
++</resources>
+*** End Patch

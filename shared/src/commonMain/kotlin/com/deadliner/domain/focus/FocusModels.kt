@@ -1,6 +1,8 @@
+@file:OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 package com.deadliner.domain.focus
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
 import kotlinx.datetime.Instant
 
 @Serializable
@@ -22,6 +24,8 @@ enum class FocusCompletionKind {
     FOCUS_AND_TASK_CHANGED,
     COUNTDOWN_ELAPSED,
     TASK_BECAME_INACTIVE,
+    FOCUS_AND_HABIT_RECORDED,
+    HABIT_BECAME_INACTIVE,
 }
 
 @Serializable
@@ -38,10 +42,18 @@ data class FocusSession(
     val createdAt: String,
     val updatedAt: String = createdAt,
     val isDeleted: Boolean = false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val target: FocusTargetRef? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val habitOccurredOn: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val habitRecordedAmount: Int? = null,
 ) {
+    val boundTarget: FocusTargetRef get() = target ?: FocusTargetRef(FocusTargetKind.TASK, taskUid)
+    val targetTitleSnapshot: String get() = taskTitleSnapshot
     init {
         require(uid.isNotBlank()) { "Focus session uid must not be blank" }
-        require(taskUid.isNotBlank()) { "Focus session taskUid must not be blank" }
+        validateFocusTarget(taskUid, target)
+        require(target?.kind != FocusTargetKind.HABIT || habitOccurredOn != null) { "Habit focus requires its start date" }
+        habitOccurredOn?.let { kotlinx.datetime.LocalDate.parse(it) }
+        require(habitRecordedAmount == null || target?.kind == FocusTargetKind.HABIT && habitOccurredOn != null && habitRecordedAmount >= 0)
         require(taskTitleSnapshot.isNotBlank()) { "Focus session task title must not be blank" }
         require(durationSeconds > 0) { "Focus session duration must be positive" }
         validatePlannedDuration(mode, plannedDurationSeconds)
@@ -68,10 +80,15 @@ data class ActiveFocusTimer(
     val runningSegmentStartedAt: String?,
     val accumulatedSeconds: Long,
     val updatedAt: String,
+    val target: FocusTargetRef? = null,
+    val habitOccurredOn: String? = null,
 ) {
+    val boundTarget: FocusTargetRef get() = target ?: FocusTargetRef(FocusTargetKind.TASK, taskUid)
     init {
         require(sessionUid.isNotBlank()) { "Active focus session uid must not be blank" }
-        require(taskUid.isNotBlank()) { "Active focus taskUid must not be blank" }
+        validateFocusTarget(taskUid, target)
+        require(target?.kind != FocusTargetKind.HABIT || habitOccurredOn != null) { "Habit focus requires its start date" }
+        habitOccurredOn?.let { kotlinx.datetime.LocalDate.parse(it) }
         require(taskTitleSnapshot.isNotBlank()) { "Active focus task title must not be blank" }
         require(accumulatedSeconds >= 0) { "Active focus accumulated duration must not be negative" }
         validatePlannedDuration(mode, plannedDurationSeconds)
@@ -107,6 +124,8 @@ sealed interface FocusTimerCommand {
     data object FinishAndCompleteTask : FocusTimerCommand
     data object Discard : FocusTimerCommand
     data object Reconcile : FocusTimerCommand
+    data class StartHabit(val habitUid: String, val mode: FocusTimerMode, val plannedDurationSeconds: Long? = null) : FocusTimerCommand
+    data class FinishAndRecordHabit(val sessionUid: String, val amount: Int? = null, val expectedHabitUpdatedAt: String? = null) : FocusTimerCommand
 }
 
 sealed interface FocusSessionCommand {
@@ -114,6 +133,7 @@ sealed interface FocusSessionCommand {
     data class Delete(val sessionUid: String) : FocusSessionCommand
 }
 
+@Serializable
 enum class FocusTimerOutcome {
     APPLIED,
     NO_OP,
@@ -126,8 +146,13 @@ enum class FocusTimerOutcome {
     INVALID_STATE,
     INVALID_DURATION,
     CLOCK_ANOMALY,
+    HABIT_NOT_FOUND,
+    HABIT_NOT_ACTIVE,
+    HABIT_NOT_DUE,
+    HABIT_INVALID_AMOUNT,
 }
 
+@Serializable
 enum class FocusTimerWarning {
     CLOCK_ANOMALY,
     LONG_RUNNING,
@@ -135,6 +160,7 @@ enum class FocusTimerWarning {
     ALARM_UNAVAILABLE,
 }
 
+@Serializable
 data class FocusTimerSnapshot(
     val sessionUid: String,
     val taskUid: String,
@@ -149,6 +175,23 @@ data class FocusTimerSnapshot(
     val canFinish: Boolean,
     val canFinishAndComplete: Boolean,
     val warning: FocusTimerWarning? = null,
+    val target: FocusTargetRef? = null,
+    val habitOccurredOn: String? = null,
+    val canFinishAndRecord: Boolean = false,
+    val habitRecordContext: FocusHabitRecordContext? = null,
+)
+
+@Serializable
+data class FocusHabitRecordContext(
+    val habitUid: String,
+    val name: String,
+    val occurredOn: String,
+    val trackingMode: com.deadliner.domain.habit.HabitTrackingMode,
+    val unit: String?,
+    val completedCount: Int,
+    val targetCount: Int,
+    val canRecord: Boolean,
+    val habitUpdatedAt: String,
 )
 
 internal fun validatePlannedDuration(mode: FocusTimerMode, plannedDurationSeconds: Long?) {

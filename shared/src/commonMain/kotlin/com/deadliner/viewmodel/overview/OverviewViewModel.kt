@@ -77,6 +77,51 @@ class OverviewViewModel(
         OverviewUiState(isLoading = false, error = error.message)
     }
 
+    /** Shared monthly dashboard projection. Never reconstruct totals in platform UI. */
+    fun loadMonthNow(monthStart: String): OverviewMonthUiState = buildMonthState(
+        LocalDate.parse(monthStart), taskRepository.list().filterNot(Task::isDeleted),
+        habitRepository.list().filterNot(Habit::isDeleted), nowProvider(), timeZoneProvider(),
+    )
+
+    internal fun buildMonthState(
+        start: LocalDate, tasks: List<Task>, habits: List<Habit>, now: Instant, timeZone: TimeZone,
+    ): OverviewMonthUiState {
+        require(start.dayOfMonth == 1) { "Expected a calendar month start" }
+        val today = now.toLocalDateTime(timeZone).date
+        require(start <= today) { "Future months are unavailable" }
+        val end = start.plus(DatePeriod(months = 1))
+        // Reuse the established shared monthly review, anchored at the following month.
+        val visibleTasks = tasks.filterNot(Task::isDeleted).filter { task ->
+            !isCompleted(task) || task.completedAt.instantOrNull()?.let { it <= now } != false
+        }
+        val times = visibleTasks.associate { task ->
+            val due = task.dueAt.instantOrNull()
+            val completed = task.completedAt.instantOrNull()
+            task.uid to OverviewTaskTimes(due, due?.toLocalDateTime(timeZone)?.date,
+                completed, completed?.toLocalDateTime(timeZone)?.date,
+                completed?.toOverviewCompletionPeriod(timeZone), task.startAt.instantOrNull())
+        }
+        val review = buildLastMonth(visibleTasks, end, times, now)
+        // Completed activity follows completion date; other mutually exclusive states follow due date.
+        val dueThisMonth = visibleTasks.filter { times.getValue(it.uid).dueDate?.let { it >= start && it < end } == true }
+        val unresolved = dueThisMonth.filterNot { isCompleted(it) || isAbandoned(it) }
+        val statusDistribution = OverviewHistory(
+            completed = review.daily.sumOf { it.completedCount },
+            abandoned = dueThisMonth.count(::isAbandoned),
+            overdue = unresolved.count { times.getValue(it.uid).dueAt?.let { due -> due < now } == true },
+            pending = unresolved.count { times.getValue(it.uid).dueAt?.let { due -> due >= now } == true },
+        )
+        return OverviewMonthUiState(
+            monthStart = start.toString(), endDateExclusive = end.toString(),
+            asOfDate = today.toString(), timeZoneId = timeZone.id,
+            completedCount = review.daily.sumOf { it.completedCount }, daily = review.daily,
+            review = review,
+            archivedTaskCount = tasks.count { !it.isDeleted && isArchived(it) },
+            archivedHabitCount = habits.count { !it.isDeleted && it.status == HabitStatus.ARCHIVED },
+            statusDistribution = statusDistribution,
+        )
+    }
+
     internal fun buildState(
         tasks: List<Task>,
         habits: List<Habit>,

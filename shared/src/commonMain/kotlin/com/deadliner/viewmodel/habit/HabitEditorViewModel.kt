@@ -37,7 +37,9 @@ class HabitEditorViewModel(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob()),
     private val notificationOrchestrator: NotificationOrchestrator? = null,
 ) {
-    private val _uiState = MutableStateFlow(HabitEditorUiState())
+    private val _uiState = MutableStateFlow(HabitEditorUiState(
+        formData = editingHabitUid?.let(habitRepository::find)?.toFormData() ?: HabitFormData(),
+    ))
     val uiState: StateFlow<HabitEditorUiState> = _uiState.asStateFlow()
 
     fun initialize() {
@@ -131,6 +133,8 @@ class HabitEditorViewModel(
             try {
                 val now = Clock.System.now().toString()
                 val existing = editingHabitUid?.let(habitRepository::find)
+                check(editingHabitUid == null || existing != null) { "Habit to edit no longer exists" }
+                check(existing?.isDeleted != true) { "Habit to edit was deleted" }
                 val habit = Habit(
                     uid = existing?.uid ?: PlatformIdentity.newId(),
                     name = form.name,

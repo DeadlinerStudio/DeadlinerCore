@@ -45,7 +45,9 @@ class IosHabitListStateBridge(
     }
 
     fun refresh() {
-        viewModel.initialize()
+        // External mutations (including focus confirmation) must reload the DB,
+        // while keeping the user's selected calendar date and search query.
+        workerScope.launch { viewModel.loadNow() }
         updateWidget(WidgetUpdateReason.USER_REFRESH)
     }
 

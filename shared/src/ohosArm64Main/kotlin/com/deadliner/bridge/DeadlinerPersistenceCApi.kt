@@ -64,7 +64,7 @@ import kotlinx.datetime.LocalDate
  * Return values are intentionally primitive so this boundary stays stable while snapshot import
  * and repository APIs are introduced in later migration phases.
  */
-private object PersistenceRuntime {
+internal object PersistenceRuntime {
     var database: DeadlinerDatabase? = null
     private var lastInitializationError: String = ""
     private var pendingLegacyV2Merge: LegacyV2MergeCache? = null

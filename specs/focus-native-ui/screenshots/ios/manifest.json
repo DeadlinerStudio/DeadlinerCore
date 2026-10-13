@@ -1,0 +1,158 @@
+[
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "F2F45498-A50D-47E8-8F73-556CEE3A7678.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "habit-binary-countdown-actual-history_0_09BC966C-ABC7-469A-A70A-B7990835CB33.png",
+        "timestamp" : 1791790551.572
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "4CD53982-C796-4979-B83C-EC166D6382F0.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "habit-countdown-setup_0_20455DA2-56DC-4FC9-9867-9AFFB257C574.png",
+        "timestamp" : 1791790542.187
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "A9F2BB7F-B59F-43A8-B2F7-A6AFC8BACDC1.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "habit-swipe-entry_0_38CFD865-0750-4AED-B099-D1CDBBBB2535.png",
+        "timestamp" : 1791790538.251
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "F1186968-3F7E-4E9B-B9A1-FA2BEBC6F191.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "habit-completed-history_0_82F44ADB-7B9E-4650-A353-70687052BD66.png",
+        "timestamp" : 1791790528.876
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "C00B7A5D-2052-494E-980C-ACF5974D60C0.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "habit-quantity-confirm_0_DC966B1E-FED6-4D4F-8C7D-B6AD6120C17C.png",
+        "timestamp" : 1791790527.108
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "B08277A7-1041-48BD-8115-20F08F44FAA4.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "habit-swipe-entry_0_874648E3-2AFA-4898-B77C-CA4618F50AE2.png",
+        "timestamp" : 1791790513.662
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "CD1D4B3F-89AC-4EED-A9CB-84913C097C16.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "task-paused-accessory_0_EE83AC91-DBE1-4DCA-B5D0-CB50B7FC3E5A.png",
+        "timestamp" : 1791790489.663
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "74870C24-CE30-46F6-A096-9DAC611E24BC.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "task-active-dial_0_CB38A20E-4168-4682-BE9A-EA940F079887.png",
+        "timestamp" : 1791790482.739
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "03018262-AE5C-4EC1-9076-6EBB24E4316A.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "task-stopwatch-setup_0_E4BA5B77-592D-4A5C-86D9-585D1A888D99.png",
+        "timestamp" : 1791790480.313
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "E4465C9F-7F2E-4852-98B1-D0AB85C00DCF.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "task-swipe-entry_0_7B4F798A-102E-4356-8754-070C66C371B7.png",
+        "timestamp" : 1791790477.251
+      }
+    ],
+    "testIdentifier" : "FocusNativeUITests/testTaskHabitAndAccessoryFlows()",
+    "testIdentifierURL" : "test://com.apple.xcode/DeadlinerFocusValidation/DeadlinerUITests/FocusNativeUITests/testTaskHabitAndAccessoryFlows"
+  },
+  {
+    "attachments" : [
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "905D5769-6F3D-47F2-8ABE-3CCBEABD1578.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "overview-上月_0_A490543A-B727-4F66-96B4-65AAF7A99551.png",
+        "timestamp" : 1791790610.657
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "5BF6121B-3DB7-4A91-8F3C-08B637B42DAD.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "overview-趋势_0_89FAD93F-CE64-4E6D-8F67-7A43A6AE2778.png",
+        "timestamp" : 1791790605.4
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "B36BEFD0-B265-4FB7-AC04-9A7CBB46AF2E.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "overview-focus-summary_0_724C71A1-482C-46E4-9387-158FFE652A55.png",
+        "timestamp" : 1791790602.014
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "A7F1D35F-AF12-4B6C-9A73-CAB872F951AE.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "history-deleted-checkin-preserved_0_F93D6F34-A95E-41AD-909B-2964AE915265.png",
+        "timestamp" : 1791790596.464
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "3E50CFAA-C416-48A9-8110-77B186E5E2F7.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "history-corrected-one-second_0_B1C0CE09-6442-472F-80BE-F6A629815B07.png",
+        "timestamp" : 1791790588.894
+      },
+      {
+        "configurationName" : "Test Scheme Action",
+        "deviceId" : "453363E2-F414-44AC-AA85-CB282E00DB85",
+        "deviceName" : "DeadlinerFocusValidation",
+        "exportedFileName" : "77093B51-92B7-44BB-9C16-7F77DA0A040C.png",
+        "isAssociatedWithFailure" : false,
+        "suggestedHumanReadableName" : "habit-swipe-entry_0_72304780-CC43-4ABE-B106-B0D57D9E4B67.png",
+        "timestamp" : 1791790569.119
+      }
+    ],
+    "testIdentifier" : "FocusNativeUITests/testZHistoryAndStatisticsFlows()",
+    "testIdentifierURL" : "test://com.apple.xcode/DeadlinerFocusValidation/DeadlinerUITests/FocusNativeUITests/testZHistoryAndStatisticsFlows"
+  }
+]

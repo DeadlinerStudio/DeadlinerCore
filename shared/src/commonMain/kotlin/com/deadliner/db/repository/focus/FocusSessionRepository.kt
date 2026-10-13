@@ -5,6 +5,8 @@ import com.deadliner.db.repository.ChangeLogRepository
 import com.deadliner.db.repository.asBoolean
 import com.deadliner.db.repository.asLong
 import com.deadliner.domain.focus.FocusCompletionKind
+import com.deadliner.domain.focus.FocusTargetRef
+import com.deadliner.domain.focus.FocusTargetKind
 import com.deadliner.domain.focus.FocusSession
 import com.deadliner.domain.focus.FocusTimerMode
 import com.deadliner.domain.focus.FocusTimerOutcome
@@ -24,6 +26,9 @@ class FocusSessionRepository(
 ) {
     fun list(): List<FocusSession> = database.focusSessionQueries.selectAll(::toSession).executeAsList()
 
+    /** Keep the latest tombstone so deleting a result cannot expose an older completion. */
+    fun latestForNotification(): FocusSession? = database.focusSessionQueries.selectLatestForNotification(::toSession).executeAsOneOrNull()
+
     fun find(uid: String): FocusSession? =
         database.focusSessionQueries.selectByUid(uid, ::toSession).executeAsOneOrNull()
 
@@ -36,6 +41,9 @@ class FocusSessionRepository(
             .selectRecentForTask(taskUid, limit.toLong(), ::toSession)
             .executeAsList()
     }
+
+    fun forTarget(target: FocusTargetRef): List<FocusSession> =
+        database.focusSessionQueries.selectForTarget(target.kind.name, target.uid, ::toSession).executeAsList()
 
     fun recent(limit: Int): List<FocusSession> {
         if (limit <= 0) return emptyList()
@@ -113,6 +121,10 @@ class FocusSessionRepository(
             session.createdAt,
             session.updatedAt,
             session.isDeleted.asLong(),
+            session.boundTarget.kind.name,
+            session.target?.takeIf { it.kind == FocusTargetKind.HABIT }?.uid,
+            session.habitOccurredOn,
+            session.habitRecordedAmount?.toLong(),
         )
         database.focusSessionQueries.updateSession(
             session.taskUid,
@@ -125,6 +137,10 @@ class FocusSessionRepository(
             session.completionKind.name,
             session.updatedAt,
             session.isDeleted.asLong(),
+            session.boundTarget.kind.name,
+            session.target?.takeIf { it.kind == FocusTargetKind.HABIT }?.uid,
+            session.habitOccurredOn,
+            session.habitRecordedAmount?.toLong(),
             session.uid,
         )
         changeLog.appendLocal(
@@ -148,6 +164,10 @@ class FocusSessionRepository(
         createdAt: String,
         updatedAt: String,
         isDeleted: Long,
+        targetKind: String,
+        habitUid: String?,
+        habitOccurredOn: String?,
+        habitRecordedAmount: Long?,
     ) = FocusSession(
         uid = uid,
         taskUid = taskUid,
@@ -161,6 +181,9 @@ class FocusSessionRepository(
         createdAt = createdAt,
         updatedAt = updatedAt,
         isDeleted = isDeleted.asBoolean(),
+        target = if (targetKind == "HABIT") FocusTargetRef(FocusTargetKind.HABIT, requireNotNull(habitUid)) else null,
+        habitOccurredOn = habitOccurredOn,
+        habitRecordedAmount = habitRecordedAmount?.toInt(),
     )
 
     private fun requirePositiveRange(startInclusive: String, endExclusive: String) {

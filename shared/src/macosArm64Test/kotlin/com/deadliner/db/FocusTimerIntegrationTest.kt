@@ -37,7 +37,7 @@ class FocusTimerIntegrationTest {
 
             assertNull(result.failureMessage)
             val upgraded = Json.decodeFromString<ChangeLogSyncPayload>(result.payload)
-            assertEquals(5, upgraded.formatVersion)
+            assertEquals(ChangeLogSyncPayload.FORMAT_VERSION, upgraded.formatVersion)
             assertEquals(SnapshotV3Root.FORMAT_VERSION, upgraded.snapshot?.formatVersion)
             assertTrue(upgraded.snapshot?.focusSessions.orEmpty().isEmpty())
         } finally {
