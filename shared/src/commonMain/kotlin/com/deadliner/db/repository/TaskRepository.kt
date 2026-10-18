@@ -4,6 +4,10 @@ import com.deadliner.db.AppDatabase
 import com.deadliner.db.repository.focus.ActiveFocusTimerStore
 import com.deadliner.domain.focus.FocusTaskPolicy
 import com.deadliner.domain.task.Task
+import com.deadliner.domain.task.TaskDeadlineCommands
+import com.deadliner.domain.task.TaskDeadlineOutcome
+import com.deadliner.domain.task.TaskDeadlineResult
+import com.deadliner.domain.task.TaskDeadlineShift
 import com.deadliner.domain.task.TaskAction
 import com.deadliner.domain.task.TaskActionOutcome
 import com.deadliner.domain.task.TaskState
@@ -21,7 +25,7 @@ class TaskRepository(
     private val json: Json = Json,
     private val mutationNotifier: RepositoryMutationNotifier = RepositoryMutationNotifier.NONE,
     private val activeTimers: ActiveFocusTimerStore = ActiveFocusTimerStore(database),
-) {
+) : TaskDeadlineCommands {
     fun list(): List<Task> = database.taskQueries.selectAll(::toTask).executeAsList().map(::withSubtasks)
 
     fun find(uid: String): Task? = database.taskQueries.selectByUid(uid, ::toTask).executeAsOneOrNull()?.let(::withSubtasks)
@@ -41,6 +45,27 @@ class TaskRepository(
         }
         return requireNotNull(result).also {
             if (it.outcome == TaskActionOutcome.APPLIED) mutationNotifier.notifyMutation()
+        }
+    }
+
+    /** Reads and updates dueAt in one transaction so repeated commands accumulate safely. */
+    override fun postponeOneDay(taskUid: String, occurredAt: String): TaskDeadlineResult {
+        var result: TaskDeadlineResult? = null
+        database.transaction {
+            val current = find(taskUid)
+            val dueAt = TaskDeadlineShift.oneDayLater(current?.dueAt)
+            result = when {
+                current == null || current.isDeleted -> TaskDeadlineResult(null, TaskDeadlineOutcome.NOT_FOUND)
+                dueAt == null -> TaskDeadlineResult(current, TaskDeadlineOutcome.INVALID_DEADLINE)
+                else -> {
+                    val updated = current.copy(dueAt = dueAt, updatedAt = occurredAt)
+                    saveInTransaction(updated, ChangeOperation.UPDATE)
+                    TaskDeadlineResult(updated, TaskDeadlineOutcome.APPLIED)
+                }
+            }
+        }
+        return requireNotNull(result).also {
+            if (it.outcome == TaskDeadlineOutcome.APPLIED) mutationNotifier.notifyMutation()
         }
     }
 
