@@ -1,6 +1,8 @@
 package com.deadliner.db
 
 import com.deadliner.domain.task.Task
+import com.deadliner.domain.task.TaskDeadlineDelay
+import com.deadliner.domain.task.TaskDeadlineUnit
 import com.deadliner.domain.task.TaskDeadlineCommands
 import com.deadliner.domain.task.TaskDeadlineOutcome
 import com.deadliner.domain.task.TaskState
@@ -37,6 +39,22 @@ class TaskDeadlineRepositoryTest {
             assertEquals(task, database.tasks.find(task.uid))
             assertEquals(TaskDeadlineOutcome.NOT_FOUND,
                 database.tasks.postponeOneDay("missing", "2026-10-19T01:00:00Z").outcome)
+        }
+    }
+    @Test fun customDelayPersistsAndInvalidDelayCannotWrite() {
+        withDatabase { database ->
+            val task = Task("custom", "Custom", startAt = "2026-10-17T09:00", dueAt = "2026-10-19T23:00",
+                createdAt = "2026-10-17T01:00:00Z", updatedAt = "2026-10-17T01:00:00Z")
+            database.tasks.create(task)
+            val result = database.tasks.postpone(task.uid, TaskDeadlineDelay(3, TaskDeadlineUnit.HOURS), "2026-10-19T01:00:00Z")
+            assertEquals(TaskDeadlineOutcome.APPLIED, result.outcome)
+            assertEquals(LocalDateTime.parse("2026-10-20T02:00"), LocalDateTime.parse(result.task!!.dueAt!!))
+            assertEquals(task.startAt, result.task!!.startAt)
+            for (delay in listOf(TaskDeadlineDelay(169, TaskDeadlineUnit.HOURS), TaskDeadlineDelay(8, TaskDeadlineUnit.DAYS),
+                TaskDeadlineDelay(0, TaskDeadlineUnit.HOURS))) {
+                assertEquals(TaskDeadlineOutcome.INVALID_DELAY, database.tasks.postpone(task.uid, delay, "2026-10-19T02:00:00Z").outcome)
+                assertEquals(result.task, database.tasks.find(task.uid))
+            }
         }
     }
     private fun withDatabase(block: (DeadlinerDatabase) -> Unit) {

@@ -7,6 +7,25 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class TaskDeadlineShiftTest {
+    @Test fun customHoursCrossMidnightAndPreservePrecision() {
+        assertEquals(LocalDateTime.parse("2026-11-01T02:23:45.123456789"), LocalDateTime.parse(
+            TaskDeadlineShift.postponed("2026-10-31T23:23:45.123456789", TaskDeadlineDelay(3, TaskDeadlineUnit.HOURS))!!))
+    }
+    @Test fun maximumWeekIsEquivalentInHoursAndDays() {
+        val raw = "2026-12-28T09:00:00Z"
+        assertEquals("2027-01-04T09:00:00Z", TaskDeadlineShift.postponed(raw, TaskDeadlineDelay(7, TaskDeadlineUnit.DAYS)))
+        assertEquals(TaskDeadlineShift.postponed(raw, TaskDeadlineDelay(7, TaskDeadlineUnit.DAYS)),
+            TaskDeadlineShift.postponed(raw, TaskDeadlineDelay(168, TaskDeadlineUnit.HOURS)))
+    }
+    @Test fun zeroNegativeOversizedAndOverflowingAmountsAreRejected() {
+        for (unit in TaskDeadlineUnit.entries) {
+            for (amount in listOf(0, -1, Int.MIN_VALUE, Int.MAX_VALUE, if (unit == TaskDeadlineUnit.HOURS) 169 else 8)) {
+                val delay = TaskDeadlineDelay(amount, unit)
+                assertEquals(false, delay.isValid)
+                assertNull(TaskDeadlineShift.postponed("2026-10-19T09:00", delay))
+            }
+        }
+    }
     @Test fun localDeadlinePreservesClockAndFractionsAcrossMonth() {
         assertEquals(LocalDateTime.parse("2026-11-01T18:23:45.123456789"),
             LocalDateTime.parse(TaskDeadlineShift.oneDayLater("2026-10-31T18:23:45.123456789")!!))

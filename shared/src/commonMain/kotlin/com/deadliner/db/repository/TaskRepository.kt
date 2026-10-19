@@ -4,7 +4,9 @@ import com.deadliner.db.AppDatabase
 import com.deadliner.db.repository.focus.ActiveFocusTimerStore
 import com.deadliner.domain.focus.FocusTaskPolicy
 import com.deadliner.domain.task.Task
-import com.deadliner.domain.task.TaskDeadlineCommands
+import com.deadliner.domain.task.TaskDeadlineAdjustmentCommands
+import com.deadliner.domain.task.TaskDeadlineDelay
+import com.deadliner.domain.task.TaskDeadlineUnit
 import com.deadliner.domain.task.TaskDeadlineOutcome
 import com.deadliner.domain.task.TaskDeadlineResult
 import com.deadliner.domain.task.TaskDeadlineShift
@@ -25,7 +27,7 @@ class TaskRepository(
     private val json: Json = Json,
     private val mutationNotifier: RepositoryMutationNotifier = RepositoryMutationNotifier.NONE,
     private val activeTimers: ActiveFocusTimerStore = ActiveFocusTimerStore(database),
-) : TaskDeadlineCommands {
+) : TaskDeadlineAdjustmentCommands {
     fun list(): List<Task> = database.taskQueries.selectAll(::toTask).executeAsList().map(::withSubtasks)
 
     fun find(uid: String): Task? = database.taskQueries.selectByUid(uid, ::toTask).executeAsOneOrNull()?.let(::withSubtasks)
@@ -49,11 +51,15 @@ class TaskRepository(
     }
 
     /** Reads and updates dueAt in one transaction so repeated commands accumulate safely. */
-    override fun postponeOneDay(taskUid: String, occurredAt: String): TaskDeadlineResult {
+    override fun postponeOneDay(taskUid: String, occurredAt: String): TaskDeadlineResult =
+        postpone(taskUid, TaskDeadlineDelay(1, TaskDeadlineUnit.DAYS), occurredAt)
+
+    override fun postpone(taskUid: String, delay: TaskDeadlineDelay, occurredAt: String): TaskDeadlineResult {
+        if (!delay.isValid) return TaskDeadlineResult(null, TaskDeadlineOutcome.INVALID_DELAY)
         var result: TaskDeadlineResult? = null
         database.transaction {
             val current = find(taskUid)
-            val dueAt = TaskDeadlineShift.oneDayLater(current?.dueAt)
+            val dueAt = TaskDeadlineShift.postponed(current?.dueAt, delay)
             result = when {
                 current == null || current.isDeleted -> TaskDeadlineResult(null, TaskDeadlineOutcome.NOT_FOUND)
                 dueAt == null -> TaskDeadlineResult(current, TaskDeadlineOutcome.INVALID_DEADLINE)
