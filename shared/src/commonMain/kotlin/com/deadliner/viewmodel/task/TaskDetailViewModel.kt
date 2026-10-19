@@ -151,12 +151,13 @@ class TaskDetailViewModel(
     fun deleteSubtask(subtaskUid: String) {
         scope.launch {
             try {
-                val currentTask = _uiState.value.task ?: return@launch
-                val updatedSubtasks = currentTask.subtasks.filter { it.uid != subtaskUid }
-                val updatedTask = currentTask.copy(subtasks = updatedSubtasks)
-                taskRepository.update(updatedTask)
-                notificationOrchestrator?.onTaskUpdated(updatedTask)
-                _uiState.update { it.copy(task = updatedTask, error = null) }
+                val result = taskRepository.deleteSubtask(taskUid, subtaskUid, Clock.System.now().toString())
+                result.task?.let { updatedTask ->
+                    if (result.outcome == TaskActionOutcome.APPLIED) {
+                        notificationOrchestrator?.onTaskUpdated(updatedTask)
+                    }
+                    _uiState.update { it.copy(task = updatedTask, error = null) }
+                }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = e.message) }
             }

@@ -130,6 +130,31 @@ class TaskRepository(
         }
     }
 
+    /** Deletes one child from the latest persisted task and records its sync tombstone atomically. */
+    fun deleteSubtask(taskUid: String, subtaskUid: String, updatedAt: String): TaskActionResult {
+        var result: TaskActionResult? = null
+        database.transaction {
+            val current = find(taskUid)
+            result = when {
+                current == null || current.isDeleted -> TaskActionResult(null, TaskActionOutcome.NOT_FOUND)
+                current.subtasks.none { it.uid == subtaskUid } -> TaskActionResult(current, TaskActionOutcome.NO_OP)
+                else -> {
+                    database.taskSubtaskQueries.softDeleteSubtask(updatedAt, subtaskUid)
+                    changeLog.appendLocal("task_subtask", subtaskUid, ChangeOperation.DELETE, null)
+                    val updated = current.copy(
+                        subtasks = current.subtasks.filterNot { it.uid == subtaskUid },
+                        updatedAt = updatedAt,
+                    )
+                    saveInTransaction(updated, ChangeOperation.UPDATE)
+                    TaskActionResult(updated, TaskActionOutcome.APPLIED)
+                }
+            }
+        }
+        return requireNotNull(result).also {
+            if (it.outcome == TaskActionOutcome.APPLIED) mutationNotifier.notifyMutation()
+        }
+    }
+
     internal fun deleteInTransaction(uid: String, updatedAt: String) {
         database.taskSubtaskQueries.selectAllForTask(uid, ::toSubtask).executeAsList().forEach { subtask ->
             if (!subtask.isDeleted) {
