@@ -143,6 +143,7 @@ class QuickAddParser {
     private fun number(value: String): Int? {
         value.toIntOrNull()?.let { return it }
         if (value == "两") return 2
+        if (value == "十") return 10
         val digits = "零一二三四五六七八九"
         if (value.length == 1) return digits.indexOf(value).takeIf { it >= 0 }
         val parts = value.split('十')
@@ -160,7 +161,7 @@ class QuickAddParser {
         private val count = Regex("([0-9零一二三四五六七八九十两]+)次")
         private const val clockGap = "[\\s\u00a0\u3000]*"
         private val clockWhitespace = Regex("[\\s\u00a0\u3000]+")
-        private val time = Regex("(凌晨|早上|上午|中午|下午|晚上|傍晚)?" + clockGap +
+        private val time = Regex("(?<![周期])(凌晨|早上|上午|中午|下午|晚上|傍晚)?" + clockGap +
             "([0-9一二三四五六七八九十两]{1,3})" + clockGap + "(?:点|时|:|：)" + clockGap +
             "(半|一刻|三刻|[0-9一二三四五六七八九十]{1,3}(?:" + clockGap + "分)?)?")
         private val weekdayDate = Regex("(下|本|这)?(?:周|星期)([一二三四五六日天1-7])")

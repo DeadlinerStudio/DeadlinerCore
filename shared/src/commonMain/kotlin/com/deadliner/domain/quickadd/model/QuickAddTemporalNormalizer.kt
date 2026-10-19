@@ -8,6 +8,34 @@ import kotlinx.datetime.*
 internal object QuickAddTemporalNormalizer {
     private const val marker = "模型标题占位"
 
+    /** Model-predicted fields only; execution days and goal window remain independent. */
+    fun normalizeHabitFields(time: String, days: String, window: String, count: String,
+        locale: String, now: Instant, zone: TimeZone): QuickAddProposal? {
+        if (locale != "zh") return null
+        val dayText = when (days.trim()) {
+            "工作日" -> "每个工作日"
+            "周末" -> "每个周末"
+            "" -> "每天"
+            else -> days.trim()
+        }
+        val base = normalize(time, dayText, "HABIT", locale, now, zone) ?: return null
+        if (base.period != "DAILY" || base.targetCount != 1 || base.dueAt != null) return null
+        val goal = when (window.trim()) {
+            "", "每天", "每日", "每个执行日", "每计划日" -> "DAILY"
+            "每周", "每星期", "每个星期" -> "WEEKLY"
+            else -> return null
+        }
+        val countText = count.trim()
+        val target = if (countText.isEmpty()) 1 else {
+            if (!Regex("[0-9零一二三四五六七八九十两]+次").matches(countText)) return null
+            val parsed = QuickAddParser().parse("每天 " + countText + " " + marker, "HABIT", now, zone)
+            if (!parsed.ready || parsed.needsAI || parsed.title != marker || parsed.kind != "HABIT" ||
+                parsed.period != "DAILY" || parsed.reminderTime != null) return null
+            parsed.targetCount
+        }
+        return base.copy(period = goal, targetCount = target)
+    }
+
     fun normalize(time: String, repeat: String, kind: String, locale: String, now: Instant, zone: TimeZone): QuickAddProposal? {
         val fields = when (locale) {
             "zh" -> ChineseQuickAddFields.normalize(time, repeat)
@@ -75,6 +103,7 @@ internal object ChineseQuickAddFields {
     private fun number(value: String): Int? {
         value.toIntOrNull()?.let { return it }
         if (value == "两") return 2
+        if (value == "十") return 10
         val digits = "零一二三四五六七八九"
         if (value.length == 1) return digits.indexOf(value).takeIf { it >= 0 }
         val parts = value.split('十')

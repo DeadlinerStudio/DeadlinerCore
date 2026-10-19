@@ -61,9 +61,18 @@ class TrainingBenchmarkAdapterTest {
             // An available model rejection never falls through to rules, including encoding limits.
             val hybrid = if (codec != null) QuickAddRecognitionPolicy().decoded(model, text, kind)
                 else QuickAddRecognitionPolicy().fallback(text, kind, now, zone)
+            val structured = row["structuredFields"]?.jsonObject?.let { fields ->
+                fun value(name: String): String = fields[name]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (kind == "HABIT") QuickAddTemporalNormalizer.normalizeHabitFields(
+                    value("time"), value("days"), value("window"), value("count"), "zh", now, zone)
+                else if (value("days").isEmpty() && value("window").isEmpty() && value("count").isEmpty())
+                    QuickAddTemporalNormalizer.normalize(value("time"), "", "TASK", "zh", now, zone)
+                else null
+            }
             val result = buildJsonObject {
                 put("id", row.getValue("id"))
                 put("rules", Json.parseToJsonElement(rules.toJson()))
+                put("structured", structured?.let { Json.parseToJsonElement(it.toJson()) } ?: JsonNull)
                 put("model", model?.let { Json.parseToJsonElement(it.toJson()) } ?: JsonNull)
                 put("hybrid", Json.parseToJsonElement(hybrid.toJson()))
                 put("rulesMs", ruleMs); put("modelMs", modelMs); put("hybridMs", ruleMs + modelMs)
