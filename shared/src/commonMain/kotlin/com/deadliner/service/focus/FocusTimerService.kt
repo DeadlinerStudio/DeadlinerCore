@@ -46,7 +46,16 @@ class FocusTimerService(
     suspend fun execute(
         command: FocusTimerCommand,
         now: Instant = Clock.System.now(),
+        expectedSessionUid: String? = null,
+        expectedUpdatedAt: String? = null,
     ): FocusTimerResult = commandMutex.withLock {
+        if (expectedSessionUid != null || expectedUpdatedAt != null) {
+            val active = activeTimers.current()
+            if (active == null || active.sessionUid != expectedSessionUid || active.updatedAt != expectedUpdatedAt) {
+                return@withLock active?.let { resultForActive(FocusTimerOutcome.INVALID_STATE, it, now) }
+                    ?: FocusTimerResult(FocusTimerOutcome.INVALID_STATE)
+            }
+        }
         when (command) {
             is FocusTimerCommand.Start -> start(command, now)
             is FocusTimerCommand.StartHabit -> {

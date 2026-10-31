@@ -2,6 +2,7 @@ package com.deadliner.bridge
 
 import com.deadliner.db.DeadlinerDatabase
 import com.deadliner.domain.focus.FocusTimerMode
+import com.deadliner.domain.focus.FocusTimerCommand
 import com.deadliner.domain.focus.FocusTargetKind
 import com.deadliner.domain.focus.FocusTargetRef
 import com.deadliner.domain.task.TaskAction
@@ -72,6 +73,23 @@ class IosFocusTimerStateBridge(
     fun resume() = viewModel.resume()
 
     fun finish() = viewModel.finish()
+
+    /** Stale ActivityKit controls must never mutate a different session or revision. */
+    fun executeLiveActivityAction(action: String, sessionUid: String, version: String,
+        onResult: (FocusTimerUiState) -> Unit) {
+        workerScope.launch {
+            val command = when (action) {
+                "pause" -> FocusTimerCommand.Pause
+                "resume" -> FocusTimerCommand.Resume
+                "finish" -> FocusTimerCommand.Finish
+                else -> null
+            }
+            val state = if (command == null || sessionUid.isBlank() || version.isBlank()) {
+                viewModel.loadNow(reconcile = false)
+            } else viewModel.executeNow(command, sessionUid, version)
+            callbackScope.launch { onResult(state) }
+        }
+    }
 
     fun finishAndCompleteTask() = viewModel.finishAndCompleteTask()
 

@@ -106,6 +106,20 @@ class IosOverviewStateBridge(
         }
     }
 
+    /** One transaction supplies the management page and all of its derived history pages. */
+    fun loadFocusManagementSnapshot(
+        onState: (com.deadliner.domain.focus.management.FocusManagementSnapshot) -> Unit,
+        onError: (String) -> Unit,
+    ) {
+        workerScope.launch {
+            try {
+                val snapshot = com.deadliner.db.repository.focus.FocusManagementRepository(database).snapshot()
+                callbackScope.launch { onState(snapshot) }
+            } catch (error: CancellationException) { throw error }
+            catch (error: Throwable) { callbackScope.launch { onError(error.message ?: "专注记录加载失败") } }
+        }
+    }
+
     /** Reuse the timer use cases, including downward-only adjustment and soft deletion. */
     fun mutateFocusSession(sessionUid: String, durationSeconds: Long?, onResult: (FocusTimerOutcome, String?) -> Unit) {
         workerScope.launch {

@@ -24,6 +24,17 @@ class KivoBehaviorTest {
         assertTrue(result.needsAI)
     }
 
+    @Test fun extractedDraftWithSourceReviewCanBeConfirmedWithoutHidingAI() {
+        val draft = KivoDraft(QuickAddProposal(title = "交报告", dueAt = "2026-10-25T15:00", note = "地点：逸夫楼"),
+            emptyList(), listOf("source-content-deleted"), FloatArray(1515), 0.0, false, canConfirm = true)
+        val result = KivoDecoder(tokenizer()).gate(draft, 100f, KivoCalibration(1.0, 0.0), .9)
+        assertTrue(result.ready)
+        assertTrue(result.needsAI)
+        assertEquals("READY_WITH_AI", result.recognitionState)
+        assertEquals("交报告", result.title)
+        assertEquals("地点：逸夫楼", result.note)
+    }
+
     @Test fun unavailableScoreOrThresholdKeepsAIOnACompleteDraft() {
         val draft = KivoDraft(QuickAddProposal(title = "开会"), emptyList(), emptyList(), FloatArray(1515), 0.0, true)
         val decoder = KivoDecoder(tokenizer())

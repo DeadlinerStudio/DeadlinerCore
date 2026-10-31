@@ -11,7 +11,7 @@ internal data class KivoSpan(val role: String, val start: Int, val end: Int,
 
 internal data class KivoDraft(val proposal: QuickAddProposal, val spans: List<KivoSpan>,
     val hardReasons: List<String>, val feature: FloatArray, val score: Double,
-    val valid: Boolean, val margin: Float = 0f) {
+    val valid: Boolean, val margin: Float = 0f, val canConfirm: Boolean = valid) {
     fun qualityFeature(): FloatArray = KivoFeatures.quality(this)
 }
 
@@ -107,16 +107,17 @@ internal class KivoDecoder(private val tokenizer: KivoTokenizer) {
         val reasons = errors.distinct()
         return KivoDraft(proposal, spans, reasons,
             KivoFeatures.base(text, kind, preferredKind, spans, probabilities, hidden),
-            spans.sumOf { it.score.toDouble() }, reasons.isEmpty())
+            spans.sumOf { it.score.toDouble() }, reasons.isEmpty(),
+            canConfirm = reasons.all { it == "source-content-deleted" })
     }
 
     fun gate(draft: KivoDraft, logit: Float?, calibration: KivoCalibration, threshold: Double?): QuickAddProposal {
         val probability = if (logit != null && logit.isFinite())
             1.0 / (1.0 + exp(-(calibration.slope * logit + calibration.bias).coerceIn(-700.0, 700.0))) else null
         val trusted = draft.valid && probability != null && probability.isFinite() && threshold != null && probability >= threshold
-        return draft.proposal.copy(ready = draft.valid, needsAI = !trusted,
-            recognitionState = if (trusted) "ACCEPTED" else if (draft.valid) "READY_WITH_AI" else "KIVO_PARTIAL",
-            message = if (trusted) "" else if (draft.valid) "可确认添加，也可使用 AI 完善" else "请确认原文，或使用 AI / 展开添加")
+        return draft.proposal.copy(ready = draft.canConfirm, needsAI = !trusted,
+            recognitionState = if (trusted) "ACCEPTED" else if (draft.canConfirm) "READY_WITH_AI" else "KIVO_PARTIAL",
+            message = if (trusted) "" else if (draft.canConfirm) "可确认添加，也可使用 AI 完善" else "请确认原文，或使用 AI / 展开添加")
     }
 
     private fun overlaps(a: KivoSpan, b: KivoSpan) = a.start < b.end && b.start < a.end

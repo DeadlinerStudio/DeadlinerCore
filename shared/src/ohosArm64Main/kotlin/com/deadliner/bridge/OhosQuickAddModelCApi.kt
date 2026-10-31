@@ -14,6 +14,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 private val sessionMutex = Mutex()
+private val preparationMutex = Mutex()
+private var sessionManifest: String? = null
+private var sessionDirectory: String? = null
 @Volatile private var modelSession: QuickAddModelSession? = null
 
 @Serializable
@@ -25,10 +28,21 @@ fun deadlinerQuickAddModelPrepare(directory: CPointer<ByteVar>?, manifest: CPoin
     val cache = directory?.toKString() ?: return 0
     val config = manifest?.toKString().orEmpty()
     runBlocking {
-        val session = sessionMutex.withLock {
-            modelSession ?: QuickAddModelSession(cache, "ohos", config).also { modelSession = it }
+        preparationMutex.withLock {
+            if (modelSession == null || sessionManifest != config || sessionDirectory != cache) {
+                val previous = sessionMutex.withLock {
+                    modelSession.also { modelSession = null }
+                }
+                previous?.close()
+                sessionMutex.withLock {
+                    modelSession = QuickAddModelSession(cache, "ohos", config)
+                    sessionManifest = config
+                    sessionDirectory = cache
+                }
+            }
+            val session = sessionMutex.withLock { modelSession } ?: return@withLock 0
+            if (session.prepare()) 1 else 0
         }
-        if (session.prepare()) 1 else 0
     }
 }.getOrDefault(0)
 
@@ -38,8 +52,9 @@ fun deadlinerQuickAddModelRecognize(request: CPointer<ByteVar>?): CPointer<ByteV
     val input = Json.decodeFromString<ModelRecognitionRequest>(request?.toKString() ?: return null)
     val payload = runBlocking {
         val session = sessionMutex.withLock { modelSession } ?: return@runBlocking null
-        if (input.now == null) session.recognizeJson(input.text, input.kind, input.timezone)
+        val result = if (input.now == null) session.recognizeJson(input.text, input.kind, input.timezone)
         else session.recognize(input.text, input.kind, input.timezone, Instant.parse(input.now)).toJson()
+        sessionMutex.withLock { if (modelSession === session) result else null }
     } ?: return null
     val bytes = payload.encodeToByteArray()
     nativeHeap.allocArray<ByteVar>(bytes.size + 1).also { pointer ->

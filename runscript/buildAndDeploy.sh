@@ -6,10 +6,12 @@ usage() {
   printf '%s\n' \
     'Usage: runscript/buildAndDeploy.sh [options]' \
     '' \
-    'With no options, builds Android, iOS, and HarmonyOS release binaries and' \
+    'With no options, builds Android, iOS, and HarmonyOS release binaries with Lifi and' \
     'deploys them to the sibling repositories in ProjectDeadliner.' \
     '' \
     'Options:' \
+    '  --configuration TYPE debug or release (default: release).' \
+    '  --lifi-mode MODE     private (default), stub, or auto.' \
     '  --android-repo PATH  Override the Android repository path.' \
     '  --ios-repo PATH      Override the iOS repository path.' \
     '  --harmony-repo PATH  Override the HarmonyOS repository path.' \
@@ -39,9 +41,16 @@ deploy_ios=true
 deploy_harmony=true
 build=true
 dry_run=false
+configuration=release
+lifi_mode="${DEADLINER_LIFI_MODE:-private}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --configuration|--lifi-mode)
+      [[ $# -ge 2 ]] || { printf '%s requires a value.\n' "$1" >&2; exit 2; }
+      if [[ "$1" == --configuration ]]; then configuration="$2"; else lifi_mode="$2"; fi
+      shift
+      ;;
     --android-repo)
       [[ $# -ge 2 ]] || { printf '%s\n' '--android-repo requires a path.' >&2; exit 2; }
       android_repo="$2"
@@ -80,11 +89,13 @@ if [[ "$deploy_android" == false && "$deploy_ios" == false && "$deploy_harmony" 
   exit 2
 fi
 
-android_aar="$project_dir/shared/build/outputs/aar/shared-release.aar"
-xcframework_dir="$project_dir/shared/build/XCFrameworks/release/Shared.xcframework"
-ohos_library="$project_dir/shared/build/bin/ohosArm64/releaseShared/libDeadlinerCore.so"
+case "$configuration" in debug|Debug) configuration=debug; configuration_task=Debug ;; release|Release) configuration=release; configuration_task=Release ;; *) echo 'configuration must be debug or release' >&2; exit 2 ;; esac
+case "$lifi_mode" in private|stub|auto) ;; *) echo 'lifi mode must be private, stub or auto' >&2; exit 2 ;; esac
+android_aar="$project_dir/shared/build/outputs/aar/shared-$configuration.aar"
+xcframework_dir="$project_dir/shared/build/XCFrameworks/$configuration/Shared.xcframework"
+ohos_library="$project_dir/shared/build/bin/ohosArm64/${configuration}Shared/libDeadlinerCore.so"
 
-android_target="$android_repo/.deadliner-core/kmp/deadliner-core.aar"
+android_target="$android_repo/.deadliner-core/kmp/$configuration/deadliner-core.aar"
 ios_target="$ios_repo/Vendor/KMP/shared.xcframework"
 harmony_target="$harmony_repo/entry/libs/arm64-v8a/libDeadlinerCore.so"
 
@@ -106,7 +117,7 @@ if [[ "$deploy_ios" == true && "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-printf '%s\n' 'Deadliner Core build and deployment plan:'
+printf 'Deadliner Core build and deployment plan: configuration=%s lifi=%s\n' "$configuration" "$lifi_mode"
 [[ "$deploy_android" == true ]] && printf '  Android:  %s\n' "$android_target"
 [[ "$deploy_ios" == true ]] && printf '  iOS:      %s\n' "$ios_target"
 [[ "$deploy_harmony" == true ]] && printf '  Harmony:  %s\n' "$harmony_target"
@@ -122,14 +133,14 @@ fi
 if [[ "$build" == true ]]; then
   deadliner_require_jdk
   gradle_tasks=()
-  [[ "$deploy_android" == true ]] && gradle_tasks+=(":shared:assembleRelease")
-  [[ "$deploy_ios" == true ]] && gradle_tasks+=(":shared:assembleSharedReleaseXCFramework")
-  [[ "$deploy_harmony" == true ]] && gradle_tasks+=(":shared:linkReleaseSharedOhosArm64")
+  [[ "$deploy_android" == true ]] && gradle_tasks+=(":shared:assemble$configuration_task")
+  [[ "$deploy_ios" == true ]] && gradle_tasks+=(":shared:assembleShared${configuration_task}XCFramework")
+  [[ "$deploy_harmony" == true ]] && gradle_tasks+=(":shared:link${configuration_task}SharedOhosArm64")
 
-  printf '\nBuilding release binaries...\n'
+  printf '\nBuilding %s binaries with Lifi mode %s...\n' "$configuration" "$lifi_mode"
   (
     cd "$project_dir"
-    ./gradlew "${gradle_tasks[@]}" --no-daemon --console=plain
+    ./gradlew "-PlifiMode=$lifi_mode" "${gradle_tasks[@]}" --no-daemon --console=plain
   )
 fi
 

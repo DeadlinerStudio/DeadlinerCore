@@ -70,6 +70,47 @@ class DeadlinerDatabase private constructor(
 
     val captures = CaptureRepository(database, changeLogRepository, mutationNotifier = repositorySync)
     val memory = MemoryRepository(database, changeLogRepository, mutationNotifier = repositorySync)
+    /** Capture the target revision before presenting an approval card. */
+    fun prepareLifiTool(actionId: String, call: com.deadliner.domain.ai.model.ToolCall) {
+        if (call !is com.deadliner.domain.ai.model.ToolCall.UpdateDeadline) return
+        val target = tasks.find(call.taskId)
+        val guard = kotlinx.serialization.json.buildJsonObject {
+            put("taskId", kotlinx.serialization.json.JsonPrimitive(call.taskId))
+            put("updatedAt", kotlinx.serialization.json.JsonPrimitive(target?.updatedAt.orEmpty()))
+        }
+        database.aiSessionQueries.saveSession("guard_" + actionId, guard.toString())
+    }
+
+    fun readLifiReceipt(actionId: String): com.deadliner.domain.ai.agent.AgentActionReceipt? =
+        database.aiSessionQueries.selectReceipt(actionId).executeAsOneOrNull()?.let {
+            com.deadliner.domain.ai.agent.AgentActionReceipt(actionId, it.tool_name, it.payload)
+        }
+
+    /** Business mutation and its durable receipt commit together; retries reuse the result. */
+    fun executeLifiTool(actionId: String, toolName: String, argumentsJson: String): String = database.transactionWithResult {
+        require(actionId.isNotBlank()) { "MISSING_ACTION_ID" }
+        val arguments = com.deadliner.domain.ai.agent.canonicalAgentJson(argumentsJson)
+        val previous = database.aiSessionQueries.selectReceipt(actionId).executeAsOneOrNull()
+        if (previous != null) {
+            require(previous.tool_name == toolName && previous.arguments == arguments) { "ACTION_ARGUMENTS_CHANGED" }
+            previous.payload
+        } else {
+            val guard = database.aiSessionQueries.selectSession("guard_" + actionId).executeAsOneOrNull()
+            val validTarget = if (toolName != "update_deadline" || guard == null) true else {
+                val expected = kotlinx.serialization.json.Json.parseToJsonElement(guard) as kotlinx.serialization.json.JsonObject
+                val args = kotlinx.serialization.json.Json.parseToJsonElement(arguments) as kotlinx.serialization.json.JsonObject
+                val uid = (args["taskId"] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+                val expectedId = (expected["taskId"] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+                val expectedRevision = (expected["updatedAt"] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+                val target = tasks.find(uid)
+                uid == expectedId && target != null && !target.isDeleted && target.updatedAt == expectedRevision
+            }
+            val result = if (validTarget) com.deadliner.service.LifiToolExecutor(tasks, habits).execute(toolName, arguments)
+                else """{"ok":false,"errorCode":"TARGET_CHANGED","message":"任务已被修改，请重新读取并确认改期。"}"""
+            database.aiSessionQueries.saveReceipt(actionId, toolName, arguments, result)
+            result
+        }
+    }
     val profiles = UserProfileRepository(database, changeLogRepository, mutationNotifier = repositorySync)
     val backups = BackupService(database)
     val changeLog = changeLogRepository
@@ -194,6 +235,21 @@ class DeadlinerDatabase private constructor(
             onComplete = onComplete,
         )
     }
+
+    /** Platform lifecycle events are inputs to the shared sync scheduling policy. */
+    fun setSyncForeground(active: Boolean) = repositorySync.setForeground(active)
+
+    fun setSyncNetworkAvailable(available: Boolean) = repositorySync.setNetworkAvailable(available)
+
+    @Throws(kotlinx.coroutines.CancellationException::class)
+    suspend fun requestSync(trigger: com.deadliner.sync.SyncTrigger): WebDavChangeLogSyncOutcome =
+        repositorySync.requestSync(trigger)
+
+    fun startSync(trigger: com.deadliner.sync.SyncTrigger,
+        onComplete: (WebDavChangeLogSyncOutcome) -> Unit): com.deadliner.sync.SyncRequest =
+        repositorySync.startSync(trigger, onComplete)
+
+    fun cancelBackgroundSync() = repositorySync.cancelBackgroundSync()
 
     fun disableAutomaticSync() {
         repositorySync.disable()

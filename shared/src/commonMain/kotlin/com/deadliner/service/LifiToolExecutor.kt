@@ -267,9 +267,7 @@ class LifiToolExecutor(
     private fun JsonObject.stringList(key: String): List<String> =
         (this[key] as? JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty()
 
-    private fun parseLocalDateTime(raw: String?): LocalDateTime? = raw?.trim()?.takeIf(String::isNotEmpty)?.let { value ->
-        runCatching { LocalDateTime.parse(value.replace(' ', 'T')) }.getOrNull()
-    }
+    private fun parseLocalDateTime(raw: String?): LocalDateTime? = LifiToolTime.parse(raw)
 
     private fun LocalDateTime.toDisplayString(): String = toString().replace('T', ' ').take(16)
 

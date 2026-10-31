@@ -179,10 +179,14 @@ class FocusTimerViewModel(
         }.getOrElse(::publishError)
     }
 
-    suspend fun executeNow(command: FocusTimerCommand): FocusTimerUiState {
+    suspend fun executeNow(
+        command: FocusTimerCommand,
+        expectedSessionUid: String? = null,
+        expectedUpdatedAt: String? = null,
+    ): FocusTimerUiState {
         val now = nowProvider()
         _uiState.update { it.copy(isBusy = true, error = null) }
-        return runCatching { publish(timerService.execute(command, now), now) }
+        return runCatching { publish(timerService.execute(command, now, expectedSessionUid, expectedUpdatedAt), now) }
             .getOrElse(::publishError)
     }
 

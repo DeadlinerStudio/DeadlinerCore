@@ -53,11 +53,14 @@ actual object PlatformLogSink {
             writeToFiles(record)
         }
         val output = message + errorMessage?.takeIf { it.isNotBlank() }?.let { ": " + it }.orEmpty()
-        when (level) {
-            LogLevel.DEBUG -> Log.d(category, output)
-            LogLevel.INFO -> Log.i(category, output)
-            LogLevel.WARN -> Log.w(category, output)
-            LogLevel.ERROR -> Log.e(category, output)
+        // Diagnostic output must never fail the operation it is observing.
+        runCatching {
+            when (level) {
+                LogLevel.DEBUG -> Log.d(category, output)
+                LogLevel.INFO -> Log.i(category, output)
+                LogLevel.WARN -> Log.w(category, output)
+                LogLevel.ERROR -> Log.e(category, output)
+            }
         }
     }
 

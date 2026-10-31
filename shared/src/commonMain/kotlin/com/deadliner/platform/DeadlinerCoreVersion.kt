@@ -4,16 +4,15 @@ package com.deadliner.platform
  * Version of the KMP core embedded when this artifact was compiled.
  *
  * Host applications should use [value] for diagnostics and [bridgeVersion] for the existing
- * HarmonyOS ABI compatibility gate. The identifier is generated from compile date, Git branch,
- * and compile user name, so it identifies the binary that is actually linked rather than the
- * source checkout that built it.
+ * HarmonyOS ABI compatibility gate. The identifier records the source commit, Git branch,
+ * and build user. Uncommitted edits are compiled normally but share their HEAD commit identifier.
  */
 object DeadlinerCoreVersion {
-    /** `DeadlinerCore-YYYYMMDD-HH-branch@user`, generated at compile time. */
+    /** `DeadlinerCore-commit6-branch@user`, using the first six commit characters. */
     val value: String
         get() = KmpBuildMetadata.coreVersion
 
-    /** UTC compile hour in `YYYYMMDD-HH` form. */
+    /** UTC commit hour in `YYYYMMDD-HH` form, unless overridden by the build. */
     val compileDate: String
         get() = KmpBuildMetadata.compileDate
 
@@ -29,7 +28,7 @@ object DeadlinerCoreVersion {
     val bridgeVersion: Int
         get() = KmpBuildMetadata.bridgeVersion
 
-    /** UTC instant at which the containing KMP artifact was compiled. */
+    /** UTC commit instant, unless overridden by the build; retained under its legacy API name. */
     val compiledAtUtc: String
         get() = KmpBuildMetadata.compiledAtUtc
 }

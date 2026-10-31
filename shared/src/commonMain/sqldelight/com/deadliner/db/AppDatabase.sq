@@ -200,3 +200,14 @@ enableForeignKeys:
 PRAGMA foreign_keys = 1;
 
 CREATE INDEX idx_focus_session_habit ON focus_session(is_deleted, target_kind, habit_uid, started_at);
+CREATE TABLE ai_session (
+    session_id TEXT NOT NULL PRIMARY KEY,
+    payload TEXT NOT NULL
+);
+
+CREATE TABLE ai_execution_receipt (
+    action_id TEXT NOT NULL PRIMARY KEY,
+    tool_name TEXT NOT NULL,
+    arguments TEXT NOT NULL,
+    payload TEXT NOT NULL
+);

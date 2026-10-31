@@ -45,6 +45,21 @@ rechecking/removing this repair and repeating full regression. See the
 [diagnosis](specs/native-test-stability/diagnosis.md) and
 [acceptance results](specs/native-test-stability/validation.md).
 
+### Stable build metadata
+
+The embedded core identifier uses `DeadlinerCore-<commit6>-<branch>@<user>`,
+where `commit6` is the first six characters of the commit hash.
+Metadata generation is up to date when its inputs have not changed, and never
+rewrites identical content. The legacy `compileDate` and `compiledAtUtc` fields
+use the HEAD commit's committer time rather than the wall clock. Uncommitted
+source edits still trigger compilation normally but retain the HEAD identifier.
+
+CI/source archives can override `deadlinerCoreCommit`,
+`deadlinerCoreCompiledAtUtc` (an ISO-8601 instant), `deadlinerCoreCompileDate`,
+`deadlinerCoreCompileBranch`, and `deadlinerCoreCompileUserName` using `-P`.
+Without Git, the default revision is `unknown` and the default time is the Unix
+epoch. For repeatable builds, keep overrides stable for the same source revision.
+
 ### One-command local deployment
 
 Build every release binary and put it directly in the matching local client
@@ -57,7 +72,7 @@ runscript/buildAndDeploy.sh
 The zero-argument command auto-detects the sibling repositories linked under
 `ProjectDeadliner` and deploys verified outputs to:
 
-- Android: `Deadliner/.deadliner-core/kmp/deadliner-core.aar`
+- Android: `Deadliner/.deadliner-core/kmp/{debug,release}/deadliner-core.aar`
 - iOS: `Deadliner-iOS/Vendor/KMP/shared.xcframework`
 - HarmonyOS: `DeadlinerNEXT/entry/libs/arm64-v8a/libDeadlinerCore.so`
 
@@ -79,9 +94,38 @@ It compiles Android, iOS Simulator and macOS sources; links the iOS Simulator fr
 
 ## Closed-source binary releases
 
-The Lifi implementation remains local and is deliberately excluded from Git. Build
-all client artifacts on a trusted macOS machine, then publish only binaries to a
-**private** GitHub Release:
+Lifi is maintained in the [private repository](https://github.com/DeadlinerStudio/Lifi).
+A normal clone of DeadlinerCore builds without access to it. Public AI models,
+`AIComponent`, `LifiRuntime`, persistence and platform bridges remain in this repo.
+The public fallback preserves the host-facing API; AI calls throw
+`LifiUnavailableException` (`LIFI_UNAVAILABLE`) and never call providers or execute
+tools. Check `LifiAvailability.isAvailable` to hide or disable AI entry points.
+
+Build modes (Gradle property):
+
+- `-PlifiMode=auto` (default): use the private checkout if installed, otherwise fallback.
+- `-PlifiMode=stub`: force the public fallback even on a maintainer's machine.
+- `-PlifiMode=private`: require the private implementation; fail if missing/incompatible.
+
+Maintainers with private repo access can install the revision pinned in
+`lifi.revision`:
+
+```bash
+runscript/setupLifi.sh
+./gradlew -PlifiMode=private :shared:macosArm64Test
+# Verify the public build explicitly:
+./gradlew -PlifiMode=stub :shared:compileDebugKotlinAndroid :shared:macosArm64Test
+```
+
+The private checkout is ignored at `.private/lifi`; it is not a required submodule.
+No GitHub credentials, private fetches or extra setup are needed for public builds.
+The private source overlay shares Core's KMP compilation to avoid a circular module
+dependency. Private provider/agent tests run only in private mode. To upgrade,
+commit/push private changes and update `lifi.revision` in the matching Core change.
+
+Build all client artifacts on a trusted macOS machine, then publish only binaries
+to a **private** GitHub Release. The release script forces private mode:
+
 
 ```bash
 runscript/releaseBinaries.sh v0.2.0
@@ -102,3 +146,33 @@ its checksum before copying it into its native-library directory.
 - `shared` owns the domain contract now, then schema, queries, repositories, changelog and LWW synchronization orchestration.
 - Android and iOS own SQLDelight drivers. HarmonyOS uses CPF's `ohosArm64` target and SQLDelight `NativeSqliteDriver`; its NAPI host only loads the native shared library.
 - Network transport and remote business-table application are ports, not HTTP implementations.
+
+
+## IDE builds including private Lifi
+
+Install the pinned private checkout once with `runscript/setupLifi.sh`. Android
+Studio Run/Debug and APK/AAB builds, Xcode Run/Archive, and DevEco Run/Debug/HAP
+builds invoke Core automatically. These app entry points require private Lifi by
+default and stop with a setup hint when it is missing. For an explicitly public
+app build use `DEADLINER_LIFI_MODE=stub` (Android also accepts
+`-PdeadlinerLifiMode=stub`). Standalone Core builds retain `lifiMode=auto`.
+
+Debug uses a debug AAR/XCFramework/SO; Release uses release binaries. Android
+keeps variant outputs separate and tracks private Kotlin sources, resources and
+contract/version inputs. Xcode passes its configuration; DevEco reads Hvigor's
+build mode for both default and prod targets. Private code is compiled from its
+original local path, so native debug symbols refer to the installed source.
+With the current CPF OHOS toolchain, Debug uses optimized linking with full DWARF
+to remove unavailable runtime imports. Source breakpoints remain available;
+some optimized local variables may be unavailable. OHOS linking rejects unresolved
+Kotlin runtime symbols before a library can be deployed.
+
+The same build/deploy behavior is available manually:
+
+```bash
+runscript/buildAndDeploy.sh --configuration debug --lifi-mode private
+runscript/buildAndDeploy.sh --configuration release --lifi-mode private
+```
+
+`--no-build` copies existing outputs and is intended for manual recovery only;
+IDE builds always run Gradle. `--dry-run` checks paths without building/deploying.

@@ -1,0 +1,11 @@
+selectSession:
+SELECT payload FROM ai_session WHERE session_id = ?;
+
+saveSession:
+INSERT OR REPLACE INTO ai_session (session_id, payload) VALUES (?, ?);
+
+selectReceipt:
+SELECT tool_name, arguments, payload FROM ai_execution_receipt WHERE action_id = ?;
+
+saveReceipt:
+INSERT INTO ai_execution_receipt (action_id, tool_name, arguments, payload) VALUES (?, ?, ?, ?);

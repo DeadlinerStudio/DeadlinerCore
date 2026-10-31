@@ -81,8 +81,7 @@ class FocusSessionRepository(
     fun adjustDuration(uid: String, durationSeconds: Long, updatedAt: String): FocusSessionMutationResult {
         val existing = find(uid)?.takeUnless(FocusSession::isDeleted)
             ?: return FocusSessionMutationResult(null, FocusTimerOutcome.TIMER_NOT_FOUND)
-        val wallClockSpan = (Instant.parse(existing.endedAt) - Instant.parse(existing.startedAt)).inWholeSeconds
-        val maximum = minOf(existing.durationSeconds, wallClockSpan, MAX_ADJUSTED_DURATION_SECONDS)
+        val maximum = com.deadliner.domain.focus.management.maximumFocusAdjustment(existing)
         if (durationSeconds !in 1..maximum) {
             return FocusSessionMutationResult(existing, FocusTimerOutcome.INVALID_DURATION)
         }

@@ -5,4 +5,5 @@ import com.deadliner.domain.ai.model.ChatResponse
 
 fun interface LlmGateway {
     suspend fun chat(request: ChatRequest): ChatResponse
+    fun close() {}
 }

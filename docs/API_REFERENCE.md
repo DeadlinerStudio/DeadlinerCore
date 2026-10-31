@@ -256,4 +256,12 @@ The KMP framework base name is `Shared`. Link it into Xcode together with `sqlit
 - `triggerAt` 是原始结束时间，`endsAt` 是结束后三分钟，编辑时长不重新计算期限。
 - `version` 随记录/任务更新变化，平台执行动作前重新读取有效元数据；`OPEN_TASK` 只打开对应任务详情。
 - 配置 `configureNotificationUpdates` 的元数据模式（提供 policyProvider）后，已提交的专注记录与计时变更会触发 `triggerNotificationInfoUpdate`，结果被合入 `realtime` 并提供 `nextRefreshAt` 到期边界。
-- Android 已复用普通实时通知生命周期适配超级岛和原生 LiveUpdates；iOS ActivityKit、鸿蒙实况窗可按相同元数据接入，当前未新增其原生界面。
+- Android 已复用普通实时通知生命周期适配超级岛和原生 LiveUpdates 的专注结果卡片。本节的结束结果元数据尚未接入 iOS 或鸿蒙。
+
+## iOS 专注 Live Activities
+
+iOS 进行中的专注计时复用 `focusTimerNotificationInfo(now)`、`FocusTimerSnapshot` 与持久化 `ActiveFocusTimer`，将计时基准适配为 ActivityKit 的系统时间字段。暂停、继续和结束仍由 KMP 执行，不在 Swift 复制计时状态机。
+
+- `FocusTimerService.execute` 和 `FocusTimerViewModel.executeNow` 接受可选的 `expectedSessionUid` / `expectedUpdatedAt`，在命令锁内校验会话和版本；过期或跨会话请求返回 `INVALID_STATE`。不传时保留现有 Kotlin 调用行为。
+- `IosFocusTimerStateBridge.executeLiveActivityAction(action, sessionUid, version, onResult)` 只接受 `pause`、`resume`、`finish`，回调返回实际执行后的 `FocusTimerUiState`。Swift `LiveActivityIntent` 等待回调后同步 ActivityKit。
+- 本轮仅接入正在进行的专注，不复用 Android 的三分钟结果展示。后台挂起时依赖系统计时文本和 `staleDate`，保留原本地到时通知；重新激活应用后由 KMP 对账结束，不承诺纯本地方案在挂起时精确移除。

@@ -13,7 +13,20 @@ class MemoryRepository(
     private val changeLog: ChangeLogRepository,
     private val json: Json = Json,
     private val mutationNotifier: RepositoryMutationNotifier = RepositoryMutationNotifier.NONE,
-) {
+) : com.deadliner.domain.ai.agent.AgentSessionStore {
+    fun activeLifiSessionId(): String = readSession("__active_lifi_session__")
+        ?.takeIf { it.isNotBlank() } ?: startNewLifiSession()
+
+    fun startNewLifiSession(): String = com.deadliner.platform.PlatformIdentity.newId().also {
+        saveSession("__active_lifi_session__", it)
+    }
+
+    override fun readSession(sessionId: String): String? =
+        database.aiSessionQueries.selectSession(sessionId).executeAsOneOrNull()
+
+    override fun saveSession(sessionId: String, payload: String) {
+        database.aiSessionQueries.saveSession(sessionId, payload)
+    }
     fun list(): List<MemoryFragment> = database.memoryQueries.selectAll(::toMemory).executeAsList()
 
     fun find(uid: String): MemoryFragment? =

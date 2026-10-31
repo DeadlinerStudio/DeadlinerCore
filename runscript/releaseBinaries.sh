@@ -106,7 +106,7 @@ mkdir -p "$staging_dir"
 printf 'Building release artifacts for %s...\n' "$tag"
 (
   cd "$project_dir"
-  ./gradlew \
+  ./gradlew -PlifiMode=private \
     :shared:assembleRelease \
     :shared:assembleSharedReleaseXCFramework \
     :shared:linkReleaseSharedOhosArm64 \

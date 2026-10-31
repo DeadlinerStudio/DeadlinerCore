@@ -50,6 +50,31 @@ class FocusActionParityTest {
         assertEquals(hFresh.sessionUid, service.current(now(70)).activeTimer!!.sessionUid)
         assertFalse(db.habits.find("habit")!!.isDeleted)
     }
+
+    @Test fun liveActivityControlsRejectReplayedRevisionsAndOldSessions() = database { db ->
+        db.tasks.create(task("activity"))
+        val service = db.createFocusTimerService()
+        val first = service.execute(FocusTimerCommand.Start("activity", FocusTimerMode.STOPWATCH), now(0)).activeTimer!!
+        val paused = service.execute(FocusTimerCommand.Pause, now(10), first.sessionUid, first.updatedAt)
+        assertEquals(FocusTimerState.PAUSED, paused.activeTimer!!.state)
+        assertEquals(FocusTimerOutcome.INVALID_STATE,
+            service.execute(FocusTimerCommand.Finish, now(11), first.sessionUid, first.updatedAt).outcome)
+        val revision = paused.activeTimer!!
+        val resumed = service.execute(FocusTimerCommand.Resume, now(20), revision.sessionUid, revision.updatedAt)
+        assertEquals(FocusTimerState.RUNNING, resumed.activeTimer!!.state)
+        assertEquals(FocusTimerOutcome.INVALID_STATE,
+            service.execute(FocusTimerCommand.Resume, now(21), revision.sessionUid, revision.updatedAt).outcome)
+        val active = resumed.activeTimer!!
+        val finished = service.execute(FocusTimerCommand.Finish, now(30), active.sessionUid, active.updatedAt)
+        assertEquals(20L, finished.session!!.durationSeconds)
+        assertEquals(FocusTimerOutcome.INVALID_STATE,
+            service.execute(FocusTimerCommand.Finish, now(31), active.sessionUid, active.updatedAt).outcome)
+        val fresh = service.execute(FocusTimerCommand.Start("activity", FocusTimerMode.STOPWATCH), now(40)).activeTimer!!
+        assertEquals(FocusTimerOutcome.INVALID_STATE,
+            service.execute(FocusTimerCommand.Finish, now(50), active.sessionUid, active.updatedAt).outcome)
+        assertEquals(fresh.sessionUid, service.current(now(50)).activeTimer!!.sessionUid)
+        assertEquals(1, db.focusSessions.list().size)
+    }
     @Test fun confirmedDeletionRejectsClockAnomalyAndAllowsZeroWithoutHistory() = database { db ->
         db.tasks.create(task("delete"))
         val service = db.createFocusTimerService()
