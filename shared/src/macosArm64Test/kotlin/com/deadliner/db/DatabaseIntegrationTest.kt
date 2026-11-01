@@ -596,6 +596,41 @@ class DatabaseIntegrationTest {
         }
     }
 
+    @Test
+    fun placeholderCategoryFromIncompleteSnapshotNeverOverwritesRealCategory() {
+        val sourcePath = "${NSTemporaryDirectory()}deadliner-placeholder-source-${NSUUID().UUIDString}.db"
+        val targetPath = "${NSTemporaryDirectory()}deadliner-placeholder-target-${NSUUID().UUIDString}.db"
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath, "source-device"))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath, "target-device"))
+        try {
+            val category = Category("category.real", "Real", "flag", "#EF4444", false, 10, NOW, NOW)
+            source.categories.create(category)
+            val habit = Habit("habit.placeholder", "Uses real category", categoryUid = category.uid,
+                period = HabitPeriod.DAILY, createdAt = "2026-07-18T00:05:00Z", updatedAt = "2026-07-18T00:05:00Z")
+            source.habits.create(habit)
+
+            // A torn export: the habit is present but its category is not.
+            val payload = Json.decodeFromString<ChangeLogSyncPayload>(source.sync.mergeRemotePayload(null).payload)
+            val snapshot = requireNotNull(payload.snapshot)
+            val torn = payload.copy(snapshot = snapshot.copy(categories = snapshot.categories.filterNot { it.uid == category.uid }))
+            target.sync.mergeRemotePayload(Json.encodeToString(torn))
+            assertEquals("未命名分类", target.categories.find(category.uid)?.name)
+
+            // The placeholder travels back but must not outrank the real category.
+            source.sync.mergeRemotePayload(target.sync.mergeRemotePayload(null).payload)
+            assertEquals("Real", source.categories.find(category.uid)?.name)
+
+            // A complete snapshot repairs the placeholder on the other device.
+            target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+            assertEquals("Real", target.categories.find(category.uid)?.name)
+        } finally {
+            source.close()
+            target.close()
+            remove(sourcePath)
+            remove(targetPath)
+        }
+    }
+
     private companion object {
         const val NOW = "2026-07-18T00:00:00Z"
     }

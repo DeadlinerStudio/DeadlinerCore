@@ -37,7 +37,13 @@ import kotlinx.datetime.Clock
 class SnapshotV3Store(
     private val database: AppDatabase,
 ) {
-    fun export(): SnapshotV3Root {
+    /**
+     * One transaction gives a consistent read: without it a concurrent local write can land between
+     * the category and habit/task queries, exporting a child whose category is missing.
+     */
+    fun export(): SnapshotV3Root = database.transactionWithResult { exportInTransaction() }
+
+    private fun exportInTransaction(): SnapshotV3Root {
         val memoryUserProfile = database.memoryUserProfileQueries
             .selectProfileWithUpdatedAt { content, updatedAt -> content to updatedAt }
             .executeAsOneOrNull()
