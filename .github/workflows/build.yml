@@ -44,6 +44,10 @@ jobs:
           distribution: temurin
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
+      # runscript/native/shadow-stack-toolchain.gradle.kts requires the CPF Kotlin/Native
+      # distribution to be installed by its own invocation before any native task runs.
+      - name: Install CPF Kotlin/Native
+        run: ./gradlew :shared:downloadKotlinNativeDistribution --no-daemon --console=plain --stacktrace
       - name: Compile Apple and HarmonyOS packages, then run native tests
         run: >-
           ./gradlew
