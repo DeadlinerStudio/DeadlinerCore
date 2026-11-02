@@ -104,6 +104,78 @@ class OverviewViewModelTest {
     }
 
     @Test
+    fun wholeMonthRangeMatchesMonthlyProjection() {
+        val path = "${NSTemporaryDirectory()}overview-range-month-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "range-month-test"))
+        try {
+            val now = Instant.parse("2026-10-12T12:00:00Z")
+            fun task(id: String, due: String, state: TaskState = TaskState.ACTIVE, completed: String? = null) = Task(
+                uid = id, title = id, state = state, dueAt = due, completedAt = completed,
+                createdAt = "2026-01-01T00:00:00Z", updatedAt = now.toString())
+            val tasks = listOf(
+                task("pending", "2026-10-20T00:00:00Z"),
+                task("overdue", "2026-10-01T00:00:00Z"),
+                task("abandoned", "2026-10-01T00:00:00Z", TaskState.ABANDONED),
+                task("completed", "2026-09-01T00:00:00Z", TaskState.COMPLETED, "2026-10-01T00:00:00Z"),
+                task("archived", "2026-10-01T00:00:00Z", TaskState.ARCHIVED, "2026-10-02T00:00:00Z"),
+                task("future-completion", "2026-10-20T00:00:00Z", TaskState.COMPLETED, "2026-10-20T00:00:00Z"),
+            )
+            val vm = OverviewViewModel(database.tasks, database.habits)
+            val month = vm.buildMonthState(kotlinx.datetime.LocalDate(2026, 10, 1), tasks, emptyList(), now, TimeZone.UTC)
+            val range = vm.buildRangeState(kotlinx.datetime.LocalDate(2026, 10, 1), kotlinx.datetime.LocalDate(2026, 11, 1),
+                tasks, now, TimeZone.UTC)
+            assertEquals(month.statusDistribution, range.statusDistribution)
+            assertEquals(month.completedCount, range.completedCount)
+            assertEquals(month.daily, range.daily)
+            assertEquals(range.completedCount, range.completionBuckets.sumOf { it.completedCount })
+        } finally { database.close(); remove(path) }
+    }
+
+    @Test
+    fun customRangeSpansMonthsIntoTheFutureAndComparesWithPrecedingPeriod() {
+        val path = "${NSTemporaryDirectory()}overview-range-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "range-test"))
+        try {
+            val now = Instant.parse("2026-11-02T12:00:00Z")
+            fun task(id: String, due: String, state: TaskState = TaskState.ACTIVE, completed: String? = null) = Task(
+                uid = id, title = id, state = state, dueAt = due, completedAt = completed,
+                createdAt = "2026-01-01T00:00:00Z", updatedAt = now.toString())
+            val tasks = listOf(
+                task("before-range", "2026-10-11T00:00:00Z", TaskState.COMPLETED, "2026-10-11T08:00:00Z"),
+                task("in-range-done", "2026-10-15T00:00:00Z", TaskState.COMPLETED, "2026-10-14T20:00:00Z"),
+                task("in-range-overdue", "2026-10-20T00:00:00Z"),
+                task("future-due", "2026-12-31T09:00:00Z"),
+                task("previous-period", "2026-08-01T00:00:00Z", TaskState.COMPLETED, "2026-08-01T00:00:00Z"),
+            )
+            // 10 月 12 日到 12 月 31 日（含），共 81 天。
+            val state = OverviewViewModel(database.tasks, database.habits).buildRangeState(
+                kotlinx.datetime.LocalDate(2026, 10, 12), kotlinx.datetime.LocalDate(2027, 1, 1), tasks, now, TimeZone.UTC)
+            assertEquals(81, state.daily.size)
+            assertEquals(1, state.completedCount)
+            assertEquals(OverviewHistory(completed = 1, pending = 1, abandoned = 0, overdue = 1), state.statusDistribution)
+            assertEquals(1, state.completionBuckets.single { it.period == OverviewCompletionPeriod.EVENING }.completedCount)
+            assertEquals(3, state.metrics.totalTasks)
+            // 前一个等长时段是 7 月 23 日到 10 月 11 日：含 8 月 1 日和 10 月 11 日到期的两项。
+            assertEquals(2, state.metrics.previousTotalTasks)
+            assertEquals(listOf("in-range-done"), state.completedTaskTitles)
+            assertEquals("2026-11-02", state.asOfDate)
+        } finally { database.close(); remove(path) }
+    }
+
+    @Test
+    fun emptyOrReversedRangesAreRejected() {
+        val path = "${NSTemporaryDirectory()}overview-range-invalid-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "range-invalid-test"))
+        try {
+            val vm = OverviewViewModel(database.tasks, database.habits)
+            val day = kotlinx.datetime.LocalDate(2026, 10, 12)
+            kotlin.test.assertFailsWith<IllegalArgumentException> {
+                vm.buildRangeState(day, day, emptyList(), Instant.parse("2026-11-02T12:00:00Z"), TimeZone.UTC)
+            }
+        } finally { database.close(); remove(path) }
+    }
+
+    @Test
     fun aggregatesOverviewMetricsFromSharedTaskAndHabitModels() {
         val path = "${NSTemporaryDirectory()}deadliner-overview-${NSUUID().UUIDString}.db"
         val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "overview-test-device"))

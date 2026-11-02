@@ -161,3 +161,22 @@ data class OverviewMonthUiState(
 ) {
     val archivedCount: Int get() = archivedTaskCount + archivedHabitCount
 }
+
+/**
+ * A custom local date range `[startDate, endDateExclusive)`. `daily` covers every day of the range
+ * (days after `asOfDate` have no completions); `metrics` compare with the preceding period of the
+ * same length.
+ */
+@Serializable
+data class OverviewRangeUiState(
+    val startDate: String,
+    val endDateExclusive: String,
+    val asOfDate: String,
+    val timeZoneId: String,
+    val completedCount: Int,
+    val daily: List<OverviewDailyStat>,
+    val statusDistribution: OverviewHistory,
+    val completionBuckets: List<OverviewCompletionBucket>,
+    val metrics: OverviewMonthlyMetrics,
+    val completedTaskTitles: List<String>,
+)
