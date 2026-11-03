@@ -631,6 +631,42 @@ class DatabaseIntegrationTest {
         }
     }
 
+    @Test
+    fun placeholderCannotOverwriteEpochPresetEvenWithHigherDeviceId() {
+        val sourcePath = "${NSTemporaryDirectory()}preset-source-${NSUUID().UUIDString}.db"
+        val targetPath = "${NSTemporaryDirectory()}preset-target-${NSUUID().UUIDString}.db"
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath))
+        try {
+            val preset = CategoryPresets.all.first()
+            source.habits.create(Habit("habit.preset", "Preset reference", categoryUid = preset.uid,
+                period = HabitPeriod.DAILY, createdAt = NOW, updatedAt = NOW))
+            val payload = Json.decodeFromString<ChangeLogSyncPayload>(source.sync.mergeRemotePayload(null).payload)
+            val snapshot = requireNotNull(payload.snapshot)
+            // Model an existing receiver without presets (for example after restoring an older backup).
+            target.database.categoryQueries.deleteAll()
+            target.sync.mergeRemotePayload(Json.encodeToString(payload.copy(snapshot = snapshot.copy(
+                categories = snapshot.categories.filterNot { it.uid == preset.uid }))))
+            assertEquals("未命名分类", target.categories.find(preset.uid)?.name)
+            val exported = Json.decodeFromString<ChangeLogSyncPayload>(target.sync.mergeRemotePayload(null).payload)
+            val placeholderSnapshot = requireNotNull(exported.snapshot)
+            // Use distinct device IDs explicitly: the native test factory shares process identity.
+            source.database.legacyV2VersionQueries.upsertVersion("v3/category", preset.uid, preset.updatedAt, 0, "a-source")
+            val returned = exported.copy(snapshot = placeholderSnapshot.copy(categories = placeholderSnapshot.categories.map {
+                if (it.uid == preset.uid) it.copy(ver = it.ver.copy(dev = "z-target")) else it
+            }))
+            source.sync.mergeRemotePayload(Json.encodeToString(returned))
+            assertEquals(preset.name, source.categories.find(preset.uid)?.name)
+            assertEquals(preset.iconKey, source.categories.find(preset.uid)?.iconKey)
+            assertEquals(preset.colorHex, source.categories.find(preset.uid)?.colorHex)
+            target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+            assertEquals(preset.name, target.categories.find(preset.uid)?.name)
+            assertTrue(target.categories.find(preset.uid)?.isPreset == true)
+        } finally {
+            source.close(); target.close(); remove(sourcePath); remove(targetPath)
+        }
+    }
+
     private companion object {
         const val NOW = "2026-07-18T00:00:00Z"
     }

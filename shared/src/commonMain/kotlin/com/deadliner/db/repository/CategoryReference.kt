@@ -8,7 +8,7 @@ import com.deadliner.domain.category.Category
  * entity is written. It is only a compatibility placeholder for malformed or
  * legacy references; normal preset rows are seeded during database creation.
  *
- * The placeholder uses the epoch instead of the entity's timestamp: snapshot export derives an
+ * The placeholder predates the Unix epoch used by built-in presets: snapshot export derives an
  * unstored category version from `updatedAt`, and a placeholder must never outrank the real
  * category, which would otherwise be renamed to the placeholder on every device.
  */
@@ -38,4 +38,4 @@ internal fun AppDatabase.ensureCategoryReference(categoryUid: String?, timestamp
     )
 }
 
-internal const val PLACEHOLDER_CATEGORY_TIMESTAMP = "1970-01-01T00:00:00Z"
+internal const val PLACEHOLDER_CATEGORY_TIMESTAMP = "0001-01-01T00:00:00Z"
