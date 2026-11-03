@@ -12,6 +12,30 @@ This repository hosts the isolated Kotlin Multiplatform domain, persistence, and
 
 SQLDelight schema and repositories implement these models without redefining them. The reconciled Android/iOS final DDL is documented in `specs/kmp-persistence-sync/android-ios-reconciliation.md`. The initial integration-facing [API reference](docs/API_REFERENCE.md) covers repositories, synchronization, snapshots, and platform driver factories.
 
+## Lint
+
+GitHub Actions runs source-only Kotlin lint with the pinned detekt CLI:
+
+```bash
+bash runscript/lint.sh
+```
+
+This requires JDK 21, curl and shasum. The first run downloads a checksum-verified
+linter from Maven Central; subsequent runs use `build/tools/detekt`. It scans
+public Kotlin source sets (including tests and Lifi stubs) and Kotlin build
+scripts without evaluating Gradle, resolving application dependencies, compiling,
+or requiring Android, Xcode or HarmonyOS SDKs. Type-resolution rules are not run.
+Platform builds and runtime tests remain separate local validation steps below.
+
+Reports are written to `build/reports/detekt` and uploaded by CI even on lint
+failure. Existing findings are recorded in `config/detekt/baseline.xml`; new
+findings fail CI. Baseline changes should be reviewed rather than automatically
+regenerated on every run. To deliberately refresh it after reviewing findings:
+
+```bash
+bash runscript/lint.sh --create-baseline
+```
+
 ## Build
 
 The CPF toolchain requires JDK 17 or newer. The wrapper uses Tencent's Gradle distribution mirror, Aliyun mirrors for public Maven/Google/Gradle-plugin dependencies, and CPF's Maven repository only for its Harmony-compatible Kotlin, Kotlinx, SQLDelight, and Touchlab variants. Compile the shared module with:
