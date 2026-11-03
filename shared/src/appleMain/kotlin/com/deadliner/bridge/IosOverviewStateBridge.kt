@@ -2,6 +2,7 @@ package com.deadliner.bridge
 
 import com.deadliner.db.DeadlinerDatabase
 import com.deadliner.viewmodel.overview.OverviewMonthUiState
+import com.deadliner.viewmodel.overview.OverviewRangeUiState
 import com.deadliner.domain.focus.FocusSession
 import com.deadliner.domain.focus.FocusTimerOutcome
 import com.deadliner.domain.statistics.FocusStatisticsQuery
@@ -82,6 +83,17 @@ class IosOverviewStateBridge(
                 callbackScope.launch { onState(state) }
             } catch (error: CancellationException) { throw error }
             catch (error: Throwable) { callbackScope.launch { onError(error.message ?: "月度数据加载失败") } }
+        }
+    }
+
+    /** Custom local date range `[startDate, endDateExclusive)`; invalid ranges report through `onError`. */
+    fun loadRange(startDate: String, endDateExclusive: String, onState: (OverviewRangeUiState) -> Unit, onError: (String) -> Unit) {
+        workerScope.launch {
+            try {
+                val state = viewModel.loadRangeNow(startDate, endDateExclusive)
+                callbackScope.launch { onState(state) }
+            } catch (error: CancellationException) { throw error }
+            catch (error: Throwable) { callbackScope.launch { onError(error.message ?: "时间范围数据加载失败") } }
         }
     }
 
