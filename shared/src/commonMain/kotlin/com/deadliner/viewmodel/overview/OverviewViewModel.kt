@@ -129,7 +129,7 @@ class OverviewViewModel(
             ),
             completionBuckets = overviewCompletionPeriods().map { OverviewCompletionBucket(it, buckets[it] ?: 0) },
             metrics = buildMetrics(dueInRange, dueInPrevious, times),
-            completedTaskTitles = dueInRange.filter(::isCompleted).map(Task::title),
+            completedTaskTitles = completedInRange.map(Task::title),
         )
     }
 

@@ -24,6 +24,29 @@ import platform.posix.remove
 
 class OverviewViewModelTest {
     @Test
+    fun rangeTitlesFollowCompletionDatesIncludingTasksWithoutDueDates() {
+        val path = "${NSTemporaryDirectory()}overview-range-titles-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "range-titles-test"))
+        try {
+            val now = Instant.parse("2026-11-03T12:00:00Z")
+            fun done(id: String, due: String?, completed: String) = Task(
+                uid = id, title = id, state = TaskState.COMPLETED, dueAt = due, completedAt = completed,
+                createdAt = "2026-01-01T00:00:00Z", updatedAt = now.toString())
+            val tasks = listOf(
+                done("late-completion", "2026-09-20T00:00:00Z", "2026-10-01T00:00:00Z"),
+                done("no-due-date", null, "2026-10-16T00:00:00Z"),
+                done("completed-before-range", "2026-10-20T00:00:00Z", "2026-09-25T00:00:00Z"),
+                done("exclusive-end", "2026-10-20T00:00:00Z", "2026-11-01T00:00:00Z"),
+            )
+            val range = OverviewViewModel(database.tasks, database.habits).buildRangeState(
+                kotlinx.datetime.LocalDate(2026, 10, 1), kotlinx.datetime.LocalDate(2026, 11, 1), tasks, now, TimeZone.UTC)
+            assertEquals(2, range.completedCount)
+            assertEquals(listOf("late-completion", "no-due-date"), range.completedTaskTitles)
+            assertEquals(range.completedCount, range.completionBuckets.sumOf { it.completedCount })
+        } finally { database.close(); remove(path) }
+    }
+
+    @Test
     fun taskOnlyMutationInvalidatesOverviewEvenWhenFocusStatisticsAreUnchanged() = runBlocking {
         val path = "${NSTemporaryDirectory()}overview-invalidation-${NSUUID().UUIDString}.db"
         val core = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "overview-invalidation-test"))
