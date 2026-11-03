@@ -596,6 +596,77 @@ class DatabaseIntegrationTest {
         }
     }
 
+    @Test
+    fun placeholderCategoryFromIncompleteSnapshotNeverOverwritesRealCategory() {
+        val sourcePath = "${NSTemporaryDirectory()}deadliner-placeholder-source-${NSUUID().UUIDString}.db"
+        val targetPath = "${NSTemporaryDirectory()}deadliner-placeholder-target-${NSUUID().UUIDString}.db"
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath, "source-device"))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath, "target-device"))
+        try {
+            val category = Category("category.real", "Real", "flag", "#EF4444", false, 10, NOW, NOW)
+            source.categories.create(category)
+            val habit = Habit("habit.placeholder", "Uses real category", categoryUid = category.uid,
+                period = HabitPeriod.DAILY, createdAt = "2026-07-18T00:05:00Z", updatedAt = "2026-07-18T00:05:00Z")
+            source.habits.create(habit)
+
+            // A torn export: the habit is present but its category is not.
+            val payload = Json.decodeFromString<ChangeLogSyncPayload>(source.sync.mergeRemotePayload(null).payload)
+            val snapshot = requireNotNull(payload.snapshot)
+            val torn = payload.copy(snapshot = snapshot.copy(categories = snapshot.categories.filterNot { it.uid == category.uid }))
+            target.sync.mergeRemotePayload(Json.encodeToString(torn))
+            assertEquals("未命名分类", target.categories.find(category.uid)?.name)
+
+            // The placeholder travels back but must not outrank the real category.
+            source.sync.mergeRemotePayload(target.sync.mergeRemotePayload(null).payload)
+            assertEquals("Real", source.categories.find(category.uid)?.name)
+
+            // A complete snapshot repairs the placeholder on the other device.
+            target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+            assertEquals("Real", target.categories.find(category.uid)?.name)
+        } finally {
+            source.close()
+            target.close()
+            remove(sourcePath)
+            remove(targetPath)
+        }
+    }
+
+    @Test
+    fun placeholderCannotOverwriteEpochPresetEvenWithHigherDeviceId() {
+        val sourcePath = "${NSTemporaryDirectory()}preset-source-${NSUUID().UUIDString}.db"
+        val targetPath = "${NSTemporaryDirectory()}preset-target-${NSUUID().UUIDString}.db"
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath))
+        try {
+            val preset = CategoryPresets.all.first()
+            source.habits.create(Habit("habit.preset", "Preset reference", categoryUid = preset.uid,
+                period = HabitPeriod.DAILY, createdAt = NOW, updatedAt = NOW))
+            val payload = Json.decodeFromString<ChangeLogSyncPayload>(source.sync.mergeRemotePayload(null).payload)
+            val snapshot = requireNotNull(payload.snapshot)
+            // Model an existing receiver without presets (for example after restoring an older backup).
+            target.database.categoryQueries.deleteAll()
+            target.sync.mergeRemotePayload(Json.encodeToString(payload.copy(snapshot = snapshot.copy(
+                categories = snapshot.categories.filterNot { it.uid == preset.uid }))))
+            assertEquals("未命名分类", target.categories.find(preset.uid)?.name)
+            val exported = Json.decodeFromString<ChangeLogSyncPayload>(target.sync.mergeRemotePayload(null).payload)
+            val placeholderSnapshot = requireNotNull(exported.snapshot)
+            // Use distinct device IDs explicitly: the native test factory shares process identity.
+            source.database.legacyV2VersionQueries.upsertVersion("v3/category", preset.uid, preset.updatedAt, 0, "a-source")
+            val returned = exported.copy(snapshot = placeholderSnapshot.copy(categories = placeholderSnapshot.categories.map {
+                if (it.uid == preset.uid) it.copy(ver = it.ver.copy(dev = "z-target")) else it
+            }))
+            source.sync.mergeRemotePayload(Json.encodeToString(returned))
+            assertEquals(preset.name, source.categories.find(preset.uid)?.name)
+            assertEquals(preset.iconKey, source.categories.find(preset.uid)?.iconKey)
+            assertEquals(preset.colorHex, source.categories.find(preset.uid)?.colorHex)
+            target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+            assertEquals(preset.name, target.categories.find(preset.uid)?.name)
+            assertTrue(target.categories.find(preset.uid)?.isPreset == true)
+        } finally {
+            source.close(); target.close(); remove(sourcePath); remove(targetPath)
+        }
+    }
+
     private companion object {
         const val NOW = "2026-07-18T00:00:00Z"
     }
