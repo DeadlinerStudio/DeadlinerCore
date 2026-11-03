@@ -25,6 +25,8 @@ class BackupService internal constructor(private val database: AppDatabase) {
         ),
     )
 
+    /** Invalid files fail with [IllegalArgumentException] (decoding, format or validation); Swift sees `throws`. */
+    @Throws(IllegalArgumentException::class)
     fun restore(raw: String) {
         val backup = json.decodeFromString<BackupRoot>(raw)
         require(backup.formatVersion == BackupRoot.FORMAT_VERSION) { "Unsupported backup format" }
