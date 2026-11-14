@@ -1,7 +1,7 @@
 package com.deadliner.lifi
 
 import com.deadliner.db.DeadlinerDatabase
-import com.deadliner.db.IosDatabaseDriverFactory
+import com.deadliner.db.DatabaseDriverFactory
 import com.deadliner.domain.ai.model.AIConfig
 import com.deadliner.domain.ai.model.CoreEvent
 import com.deadliner.domain.ai.port.ToolResult
@@ -29,7 +29,7 @@ interface IosLifiEventListener {
 }
 
 /**
- * iOS lifecycle facade for the private Lifi KMP implementation.
+ * Apple (iOS and macOS) lifecycle facade for the private Lifi KMP implementation.
  *
  * It opens the supplied KMP database path, creates the private AI component,
  * and forwards typed [CoreEvent] values through [IosLifiEventListener].
@@ -131,7 +131,7 @@ class IosLifiCore private constructor(
                 "iOS databasePath must be an absolute database file path."
             }
 
-            val database = DeadlinerDatabase.create(IosDatabaseDriverFactory(databasePath))
+            val database = DeadlinerDatabase.create(appleLifiDatabaseDriverFactory(databasePath))
             return createWithDatabase(apiKey, baseUrl, model, timezone, database, ownsDatabase = true)
         }
 
@@ -139,15 +139,28 @@ class IosLifiCore private constructor(
         fun createWithDatabase(
             apiKey: String, baseUrl: String, model: String, timezone: String,
             database: DeadlinerDatabase, ownsDatabase: Boolean = false,
-        ): IosLifiCore {
-            val memoryStore = KmpMemoryStoreAdapter(database.memory)
-            val config = AIConfig(
+        ): IosLifiCore = createWithDatabase(
+            config = AIConfig(
                 apiKey = apiKey,
                 baseUrl = baseUrl,
                 model = model,
                 platform = "ios",
                 timezone = timezone,
-            )
+            ),
+            database = database,
+            ownsDatabase = ownsDatabase,
+        )
+
+        /**
+         * Same as above with a caller-built [AIConfig], so a host can set provider options such as
+         * the sampling temperature (reasoning models only accept their default) or the reply language.
+         */
+        fun createWithDatabase(
+            config: AIConfig,
+            database: DeadlinerDatabase,
+            ownsDatabase: Boolean = false,
+        ): IosLifiCore {
+            val memoryStore = KmpMemoryStoreAdapter(database.memory)
             val component = LifiAIComponent(config, memoryStore)
             val core = DeadlinerCore(
                 config = config,
@@ -183,3 +196,6 @@ class IosLifiCore private constructor(
         }
     }
 }
+
+/** The platform SQLite driver for [IosLifiCore.create]; each Apple target supplies its own. */
+internal expect fun appleLifiDatabaseDriverFactory(databasePath: String): DatabaseDriverFactory
