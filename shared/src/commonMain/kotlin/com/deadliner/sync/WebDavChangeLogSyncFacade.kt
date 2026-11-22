@@ -116,6 +116,12 @@ class WebDavChangeLogSyncFacade(
         merge: ChangeLogSyncMergeResult,
         remote: SyncBlob?,
     ) {
+        if (changeLogSync.isRemoteCurrent(remote?.bytes?.decodeToString(), merge.payload)) {
+            // Nothing changed on either side: re-uploading would only bump the remote version and
+            // make every other device download the same data again.
+            logger.d("sync.webdav", "sync.write.skipped reason=remoteCurrent")
+            return
+        }
         if (!transport.ensureCollection(ROOT_COLLECTION)) {
             throw IllegalStateException("Could not create $ROOT_COLLECTION collection.")
         }

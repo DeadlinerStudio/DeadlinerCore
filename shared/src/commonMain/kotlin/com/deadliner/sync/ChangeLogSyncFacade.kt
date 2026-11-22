@@ -114,6 +114,29 @@ class ChangeLogSyncFacade(
         }
     }
 
+    /**
+     * True when [remotePayload] already holds exactly what [mergedPayload] would upload, apart from
+     * the snapshot's root `version` (a write timestamp that changes on every export). Only a remote
+     * already in the current format qualifies, so legacy payloads are still upgraded by a write.
+     * Any doubt (unparsable JSON, extra fields, different entity order) answers false.
+     */
+    internal fun isRemoteCurrent(remotePayload: String?, mergedPayload: String): Boolean {
+        if (remotePayload.isNullOrBlank() || mergedPayload.isBlank()) return false
+        return runCatching {
+            val remote = json.parseToJsonElement(remotePayload).jsonObject
+            val merged = json.parseToJsonElement(mergedPayload).jsonObject
+            val currentFormat = JsonPrimitive(ChangeLogSyncPayload.FORMAT_VERSION)
+            val remoteSnapshot = remote["snapshot"] as? JsonObject ?: return false
+            if (remote["formatVersion"] != currentFormat || remoteSnapshot["format_version"] != currentFormat) return false
+            withoutRootVersion(remote) == withoutRootVersion(merged)
+        }.getOrDefault(false)
+    }
+
+    private fun withoutRootVersion(payload: JsonObject): JsonObject {
+        val snapshot = payload["snapshot"] as? JsonObject ?: return payload
+        return JsonObject(payload + ("snapshot" to JsonObject(snapshot - "version")))
+    }
+
     /** Kept for binary/source compatibility; snapshot synchronization has nothing to acknowledge. */
     fun acknowledgePending(pendingIdsPayload: String, serverTimestamp: Long) = Unit
 
