@@ -57,6 +57,30 @@ class LifecycleSyncIntegrationTest {
         }
     }
 
+    @Test
+    fun `sync without changes on either side does not upload again`() = runBlocking {
+        withDevices { source, target, transport ->
+            source.tasks.create(task("shared", "Shared task"))
+            assertTrue(source.webDavChangeLogSync.synchronizeSafely(transport).succeeded)
+            assertTrue(target.webDavChangeLogSync.synchronizeSafely(transport).succeeded)
+            val memory = transport as ConditionalMemoryTransport
+            val writes = memory.writes
+
+            // Neither device changed anything: both only read.
+            assertTrue(target.webDavChangeLogSync.synchronizeSafely(transport).succeeded)
+            assertTrue(source.webDavChangeLogSync.synchronizeSafely(transport).succeeded)
+            assertEquals(writes, memory.writes)
+
+            // A real change is still uploaded and reaches the other device.
+            val edited = task("shared", "Edited title").copy(updatedAt = "2026-10-30T03:00:00Z")
+            target.tasks.update(edited)
+            assertTrue(target.webDavChangeLogSync.synchronizeSafely(transport).succeeded)
+            assertEquals(writes + 1, memory.writes)
+            assertTrue(source.webDavChangeLogSync.synchronizeSafely(transport).succeeded)
+            assertEquals("Edited title", source.tasks.find("shared")?.title)
+        }
+    }
+
     private fun task(uid: String, title: String) = Task(
         uid = uid, title = title,
         createdAt = "2026-10-29T03:00:00Z", updatedAt = "2026-10-29T03:00:00Z",
@@ -79,6 +103,8 @@ class LifecycleSyncIntegrationTest {
     private class ConditionalMemoryTransport : SyncBlobTransport {
         private val blobs = mutableMapOf<String, SyncBlob>()
         private var revision = 0
+        var writes = 0
+            private set
         override suspend fun read(path: String): SyncBlob? = blobs[path]
         override suspend fun write(path: String, bytes: ByteArray, condition: SyncWriteCondition) {
             val existing = blobs[path]
@@ -89,6 +115,7 @@ class LifecycleSyncIntegrationTest {
             }
             if (!matches) throw SyncTransportPreconditionFailedException()
             revision++
+            writes++
             blobs[path] = SyncBlob(bytes.copyOf(), "v" + revision)
         }
         override suspend fun ensureCollection(path: String): Boolean = true
