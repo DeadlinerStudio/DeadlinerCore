@@ -58,7 +58,7 @@ class LifecycleSyncIntegrationTest {
     }
 
     @Test
-    fun `sync without changes on either side does not upload again`() = runBlocking {
+    fun unchangedDevicesSkipUploadAndEditsStillPropagate() = runBlocking {
         withDevices { source, target, transport ->
             source.tasks.create(task("shared", "Shared task"))
             assertTrue(source.webDavChangeLogSync.synchronizeSafely(transport).succeeded)

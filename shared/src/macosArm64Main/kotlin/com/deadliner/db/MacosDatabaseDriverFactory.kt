@@ -7,7 +7,7 @@ import com.deadliner.platform.MacosPlatformIdentity
 /** Development-machine factory used by macOS integration tests and local tooling. */
 class MacosDatabaseDriverFactory(
     private val databasePath: String,
-    private val deviceId: String = "macos-development",
+    private val deviceId: String = MacosPlatformIdentity.persistedDeviceId(),
 ) : DatabaseDriverFactory {
     override fun createDriver(): SqlDriver {
         require(databasePath.startsWith('/')) { "macOS databasePath must be absolute." }

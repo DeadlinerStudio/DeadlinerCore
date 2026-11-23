@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 class AppleMonthlyInsightBridge {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
+    @Suppress("LongParameterList") // Preserve the exported Swift callback signature.
     fun generate(config: AIConfig, month: String, metrics: String, titles: List<String>,
                  onSuccess: (String, List<String>) -> Unit, onError: (String) -> Unit) {
         scope.launch {

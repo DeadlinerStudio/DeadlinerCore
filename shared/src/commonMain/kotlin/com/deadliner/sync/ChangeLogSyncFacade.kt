@@ -126,9 +126,10 @@ class ChangeLogSyncFacade(
             val remote = json.parseToJsonElement(remotePayload).jsonObject
             val merged = json.parseToJsonElement(mergedPayload).jsonObject
             val currentFormat = JsonPrimitive(ChangeLogSyncPayload.FORMAT_VERSION)
-            val remoteSnapshot = remote["snapshot"] as? JsonObject ?: return false
-            if (remote["formatVersion"] != currentFormat || remoteSnapshot["format_version"] != currentFormat) return false
-            withoutRootVersion(remote) == withoutRootVersion(merged)
+            val remoteSnapshot = remote["snapshot"] as? JsonObject
+            remote["formatVersion"] == currentFormat &&
+                remoteSnapshot?.get("format_version") == currentFormat &&
+                withoutRootVersion(remote) == withoutRootVersion(merged)
         }.getOrDefault(false)
     }
 

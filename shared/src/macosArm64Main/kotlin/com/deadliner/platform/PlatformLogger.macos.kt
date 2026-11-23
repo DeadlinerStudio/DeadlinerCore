@@ -7,7 +7,9 @@ import platform.posix.fopen
 import platform.posix.fputs
 import platform.posix.getpid
 import platform.posix.mkdir
-import kotlin.random.Random
+import platform.Foundation.NSUUID
+import platform.posix.EEXIST
+import platform.posix.errno
 
 /**
  * macOS PlatformLogger actual 实现。
@@ -37,35 +39,44 @@ actual class PlatformLogger {
 
 @OptIn(ExperimentalForeignApi::class)
 actual object PlatformLogSink {
-    private val sessionId = Random.nextBytes(16).joinToString("") { byte -> byte.toUByte().toString(16).padStart(2, '0') }
+    private val sessionId = NSUUID().UUIDString.lowercase().replace("-", "")
     private var diagnosticsDirectory: String? = null
     private var processId: Long? = null
 
     actual fun configure(directory: String, processId: Long?) {
         val diagnostics = directory.trimEnd('/') + "/Diagnostics"
-        mkdir(diagnostics, 0x1EDu)
+        val available = mkdir(diagnostics, 0x1EDu) == 0 || errno == EEXIST
         this.processId = processId ?: getpid().toLong()
-        diagnosticsDirectory = diagnostics
+        diagnosticsDirectory = diagnostics.takeIf { available }
     }
 
     actual fun write(level: LogLevel, category: String, message: String, errorMessage: String?) {
-        val directory = diagnosticsDirectory
-        if (directory == null || level == LogLevel.WARN || level == LogLevel.ERROR) {
-            val errorSuffix = errorMessage?.takeIf { it.isNotBlank() }?.let { ": " + it }.orEmpty()
-            // Kotlin/Native cannot pass object varargs to NSLog (it traps), so the text is the
-            // format itself with every `%` escaped.
-            NSLog(("[" + level.name + "] " + category + ": " + message + errorSuffix).replace("%", "%%"))
-        }
-        if (directory == null) return
-        val record = PlatformLogFormat.record(level, category, message, sessionId, processId, errorMessage)
-        append(directory + "/deadliner-diagnostics.jsonl", PlatformLogFormat.jsonLine(record))
-        append(directory + "/deadliner-diagnostics.log", PlatformLogFormat.standardLine(record))
+        writeWithFallback(level, category, message, errorMessage) { text -> NSLog(text.replace("%", "%%")) }
     }
 
-    /** One `fputs` per record on an append-mode stream keeps concurrent lines whole. */
-    private fun append(path: String, line: String) {
-        val handle = fopen(path, "a") ?: return
-        fputs(line, handle)
-        fclose(handle)
+    internal fun writeWithFallback(
+        level: LogLevel,
+        category: String,
+        message: String,
+        errorMessage: String?,
+        systemLog: (String) -> Unit,
+    ) {
+        val directory = diagnosticsDirectory
+        val written = directory?.let {
+            val record = PlatformLogFormat.record(level, category, message, sessionId, processId, errorMessage)
+            val jsonWritten = append("$it/deadliner-diagnostics.jsonl", PlatformLogFormat.jsonLine(record))
+            val textWritten = append("$it/deadliner-diagnostics.log", PlatformLogFormat.standardLine(record))
+            jsonWritten && textWritten
+        } ?: false
+        if (!written || level == LogLevel.WARN || level == LogLevel.ERROR) {
+            val errorSuffix = errorMessage?.takeIf { it.isNotBlank() }?.let { ": " + it }.orEmpty()
+            systemLog("[${level.name}] $category: $message$errorSuffix")
+        }
+    }
+
+    private fun append(path: String, line: String): Boolean {
+        val handle = fopen(path, "a") ?: return false
+        val written = fputs(line, handle)
+        return fclose(handle) == 0 && written >= 0
     }
 }
