@@ -279,7 +279,8 @@ kotlin {
             linkTaskProvider.configure {
                 dependsOn(extractOhosSqliteStaticLibraries)
                 doLast {
-                    val nm = File(nativeSysroot.get()).parentFile.resolve("llvm/bin/llvm-nm")
+                    val nm = providers.gradleProperty("harmonyLlvmNm").orNull?.let(::File)
+                        ?: File(nativeSysroot.get()).parentFile.resolve("llvm/bin/llvm-nm")
                     check(nm.isFile) { "OHOS llvm-nm missing at $nm; configure the DevEco Native SDK." }
                     val process = ProcessBuilder(nm.absolutePath, "--dynamic", "--undefined-only", linkedLibrary.absolutePath)
                         .redirectErrorStream(true).start()

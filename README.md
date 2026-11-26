@@ -149,24 +149,21 @@ commit or push operates on Core alone. For a coordinated LiFi upgrade, push the
 reviewed private commit first, then update `lifi.revision` to its full SHA in
 the matching Core change.
 
-### Desktop CLI artifacts
+### Public binary packages
 
-The **Desktop CLI with LiFi** workflow builds the CLI revision in `cli.revision`
-against this Core commit and the LiFi commit in `lifi.revision`. Add a read-only
-deploy key to DeadlinerStudio/Lifi and store its private half in the Core Actions
-secret `LIFI_READ_KEY`. When organization policy disables deploy keys, set
-`LIFI_READ_TOKEN` to a fine-grained token with Contents read access restricted
-to the LiFi repository. Push the pinned CLI revision to DeadlinerStudio/DeadlinerCli
-before pushing the matching Core change. The workflow runs on the listed trusted
-branches and supports manual dispatch. Pull requests use the existing lint job.
+Versioned mobile libraries and desktop CLI archives are published together at
+`ghcr.io/deadlinerstudio/deadliner-core`. Each OCI manifest records the Core,
+CLI and LiFi revisions. The publisher builds from `core.revision` in the private
+LiFi repository and uses this Core revision's `cli.revision` and `lifi.revision`.
+Its Actions token reads LiFi and publishes packages. Public Core builds use the
+source-only lint workflow.
 
-The public Actions run offers `deadliner-macos-arm64` (native executable),
-`deadliner-linux-x64` and `deadliner-windows-x64` (self-contained application
-images), plus the compiled desktop JARs. Extract the platform archive and run
-`deadliner` on macOS, `deadliner/bin/deadliner` on Linux, or
-`deadliner/deadliner.exe` on Windows. Use `--json version` to inspect the Core
-revision and LiFi flag. Each launcher runs the CLI integration suite before
-its archive is uploaded. The CLI's existing command set is unchanged.
+Download all files with `oras pull ghcr.io/deadlinerstudio/deadliner-core:<version>`.
+For reproducible builds, replace `:<version>` with `@sha256:<manifest digest>`.
+The package contains the Android AAR, iOS XCFramework ZIP, HarmonyOS arm64 shared
+library, and CLI archives for macOS ARM64, Linux x64 and Windows x64. Linux and
+Windows archives include the runtime. Run the extracted CLI with `--json version`
+to inspect the embedded Core revision and LiFi availability.
 
 ### Mobile client releases
 
