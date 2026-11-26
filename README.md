@@ -144,8 +144,31 @@ runscript/setupLifi.sh
 The private checkout is ignored at `.private/lifi`; it is not a required submodule.
 No GitHub credentials, private fetches or extra setup are needed for public builds.
 The private source overlay shares Core's KMP compilation to avoid a circular module
-dependency. Private provider/agent tests run only in private mode. To upgrade,
-commit/push private changes and update `lifi.revision` in the matching Core change.
+dependency. Private provider/agent tests run only in private mode. A normal Core
+commit or push operates on Core alone. For a coordinated LiFi upgrade, push the
+reviewed private commit first, then update `lifi.revision` to its full SHA in
+the matching Core change.
+
+### Desktop CLI artifacts
+
+The **Desktop CLI with LiFi** workflow builds the CLI revision in `cli.revision`
+against this Core commit and the LiFi commit in `lifi.revision`. Add a read-only
+deploy key to DeadlinerStudio/Lifi and store its private half in the Core Actions
+secret `LIFI_READ_KEY`. When organization policy disables deploy keys, set
+`LIFI_READ_TOKEN` to a fine-grained token with Contents read access restricted
+to the LiFi repository. Push the pinned CLI revision to DeadlinerStudio/DeadlinerCli
+before pushing the matching Core change. The workflow runs on the listed trusted
+branches and supports manual dispatch. Pull requests use the existing lint job.
+
+The public Actions run offers `deadliner-macos-arm64` (native executable),
+`deadliner-linux-x64` and `deadliner-windows-x64` (self-contained application
+images), plus the compiled desktop JARs. Extract the platform archive and run
+`deadliner` on macOS, `deadliner/bin/deadliner` on Linux, or
+`deadliner/deadliner.exe` on Windows. Use `--json version` to inspect the Core
+revision and LiFi flag. Each launcher runs the CLI integration suite before
+its archive is uploaded. The CLI's existing command set is unchanged.
+
+### Mobile client releases
 
 Build all client artifacts on a trusted macOS machine, then publish only binaries
 to a **private** GitHub Release. The release script forces private mode:

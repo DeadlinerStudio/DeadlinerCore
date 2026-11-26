@@ -1,0 +1,142 @@
+name: Desktop CLI with LiFi
+
+on:
+  push:
+    branches: [main, byos, codex/desktop-cli-artifacts]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    if: github.repository == 'DeadlinerStudio/DeadlinerCore' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/byos' || github.ref == 'refs/heads/codex/desktop-cli-artifacts')
+    runs-on: macos-15
+    timeout-minutes: 90
+    outputs:
+      cli: ${{ steps.pins.outputs.cli }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: core
+          persist-credentials: false
+      - name: Read pinned source revisions
+        id: pins
+        working-directory: core
+        run: |
+          for name in cli lifi; do
+            sha=$(cat "$name.revision")
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+            echo "$name=$sha" >> "$GITHUB_OUTPUT"
+          done
+      - uses: actions/checkout@v4
+        with:
+          repository: DeadlinerStudio/DeadlinerCli
+          ref: ${{ steps.pins.outputs.cli }}
+          path: cli
+          persist-credentials: false
+      - name: Check LiFi checkout configuration
+        env:
+          HAS_CREDENTIAL: ${{ secrets.LIFI_READ_KEY != '' || secrets.LIFI_READ_TOKEN != '' }}
+        run: |
+          if [[ "$HAS_CREDENTIAL" != true ]]; then
+            echo "::error::Configure LIFI_READ_TOKEN or LIFI_READ_KEY for read-only LiFi checkout."
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+        with:
+          repository: DeadlinerStudio/Lifi
+          ref: ${{ steps.pins.outputs.lifi }}
+          path: core/.private/lifi
+          # Use the repository-scoped HTTPS credential when deploy keys are disabled.
+          token: ${{ secrets.LIFI_READ_TOKEN || github.token }}
+          ssh-key: ${{ secrets.LIFI_READ_KEY }}
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile pinned desktop and macOS sources
+        working-directory: core
+        run: |
+          test "$(git -C .private/lifi rev-parse HEAD)" = "$(cat lifi.revision)"
+          ./gradlew -PlifiMode=private :shared:downloadKotlinNativeDistribution
+          ./gradlew -PlifiMode=private -PdesktopCliDir="$GITHUB_WORKSPACE/cli" :shared:stageDesktopCli
+          DEADLINER_CORE_DIR="$PWD" DEADLINER_LIFI_MODE=private ../cli/scripts/build.sh
+      - name: Test and archive macOS ARM64 executable
+        working-directory: cli
+        run: |
+          bin/deadliner --json version | python3 -c 'import json,os,sys; d=json.load(sys.stdin)["data"]; assert d["lifi"] and os.environ["GITHUB_SHA"][:6] in d["core"]'
+          python3 tests/integration.py
+          mkdir release
+          cp bin/deadliner LICENSE ../core/cli.revision ../core/lifi.revision release/
+          echo "$GITHUB_SHA" > release/core.revision
+          tar -C release -czf deadliner-macos-arm64.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deadliner-macos-arm64
+          path: cli/deadliner-macos-arm64.tar.gz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-cli-jars
+          path: core/shared/build/desktop-cli/*.jar
+          if-no-files-found: error
+
+  package:
+    needs: compile
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux-x64
+            executable: dist/deadliner/bin/deadliner
+            archive: deadliner-linux-x64.tar.gz
+          - os: windows-2022
+            platform: windows-x64
+            executable: dist/deadliner/deadliner.exe
+            archive: deadliner-windows-x64.zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: DeadlinerStudio/DeadlinerCli
+          ref: ${{ needs.compile.outputs.cli }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-cli-jars
+          path: jars
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          architecture: x64
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Create standalone application image
+        run: python scripts/package-desktop.py jars dist
+      - name: Verify packaged CLI
+        shell: bash
+        env:
+          DEADLINER_TEST_BINARY: ${{ matrix.executable }}
+          PLATFORM: ${{ matrix.platform }}
+          PYTHONUTF8: '1'
+        run: |
+          "$DEADLINER_TEST_BINARY" --json schema | python -c 'import json,os,sys; assert json.load(sys.stdin)["data"]["platform"] == os.environ["PLATFORM"]'
+          "$DEADLINER_TEST_BINARY" --json version | python -c 'import json,os,sys; d=json.load(sys.stdin)["data"]; assert d["lifi"] and os.environ["GITHUB_SHA"][:6] in d["core"]'
+          python tests/integration.py
+      - name: Archive Linux image
+        if: runner.os == 'Linux'
+        run: tar -C dist -czf deadliner-linux-x64.tar.gz deadliner
+      - name: Archive Windows image
+        if: runner.os == 'Windows'
+        run: python -c "import shutil; shutil.make_archive('deadliner-windows-x64', 'zip', 'dist', 'deadliner')"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deadliner-${{ matrix.platform }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error

@@ -158,7 +158,44 @@ if (usePrivateLifi) {
 }
 logger.lifecycle("Lifi implementation: ${if (usePrivateLifi) "private" else "stub"}")
 
+// Desktop packaging is opt-in so app builds retain their existing target graph.
+val desktopCliDir = providers.gradleProperty("desktopCliDir").orNull?.let(::file)
 kotlin {
+    if (desktopCliDir != null) {
+        require(desktopCliDir.resolve("src/jvm/Main.kt").isFile) {
+            "desktopCliDir must point to the desktop CLI checkout listed in cli.revision"
+        }
+        val desktop = jvm("desktop")
+        val main = desktop.compilations.getByName("main")
+        main.defaultSourceSet.apply {
+            kotlin.srcDir(desktopCliDir.resolve("src/common"))
+            kotlin.srcDir(desktopCliDir.resolve("src/jvm"))
+            kotlin.srcDir("src/androidMain/kotlin/com/deadliner/domain/quickadd/model")
+            if (usePrivateLifi) {
+                // The private HTTP actual uses portable Ktor APIs with the OkHttp engine.
+                kotlin.srcDir(lifiDirectory.resolve("src/androidMain/kotlin/com/deadliner/lifi/llm"))
+            }
+            dependencies {
+                implementation("app.cash.sqldelight:sqlite-driver:2.1.0")
+                implementation(libs.ktor.client.okhttp)
+                implementation(libs.ktor.client.content.negotiation)
+                implementation(libs.ktor.serialization.kotlinx.json)
+            }
+        }
+        val runtime = configurations.getByName(main.runtimeDependencyConfigurationName)
+        val jar = tasks.named<Jar>(desktop.artifactsTaskName) {
+            archiveFileName.set("deadliner-cli.jar")
+            inputs.files(runtime)
+            doFirst {
+                manifest.attributes("Class-Path" to runtime.files.joinToString(" ") { it.name })
+            }
+        }
+        tasks.register<Sync>("stageDesktopCli") {
+            from(jar, runtime)
+            into(layout.buildDirectory.dir("desktop-cli"))
+            duplicatesStrategy = DuplicatesStrategy.FAIL
+        }
+    }
     androidTarget {
         compilations.configureEach {
             if (name.contains("debug", ignoreCase = true)) {
@@ -273,6 +310,9 @@ kotlin {
         }
         // The model cache uses the same real POSIX file implementation on Native targets.
         configureEach {
+            if (name == "macosArm64Main" || name == "desktopMain") {
+                kotlin.srcDir("src/desktopToolingMain/kotlin")
+            }
             if (name in setOf("iosMain", "macosArm64Main", "ohosArm64Main")) {
                 kotlin.srcDir("src/posixMain/kotlin")
             }
