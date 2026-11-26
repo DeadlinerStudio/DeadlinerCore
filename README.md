@@ -155,6 +155,8 @@ Versioned mobile libraries, the macOS App framework and desktop CLI archives are
 `ghcr.io/deadlinerstudio/deadliner-core`. Each OCI manifest records the Core,
 CLI and LiFi revisions. The publisher builds from `core.revision` in the private
 LiFi repository and uses this Core revision's `cli.revision` and `lifi.revision`.
+The release also pins the macOS framework configuration and desktop packaging
+tools. Its OCI annotations identify the packager and original native build run.
 Its Actions token reads LiFi and publishes packages. Public Core builds use the
 source-only lint workflow.
 
