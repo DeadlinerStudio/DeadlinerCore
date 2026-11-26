@@ -4,9 +4,10 @@ import com.deadliner.db.repository.HabitRepository
 import com.deadliner.db.repository.TaskRepository
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitRecord
-import com.deadliner.domain.habit.HabitRecordStatus
+import com.deadliner.domain.habit.HabitProgressEngine
 import com.deadliner.domain.habit.HabitStatus
 import com.deadliner.domain.task.Task
+import com.deadliner.platform.PlatformLogger
 import com.deadliner.domain.task.TaskState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
 import kotlinx.datetime.DatePeriod
+import kotlinx.datetime.daysUntil
 import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
@@ -76,6 +78,108 @@ class OverviewViewModel(
         OverviewUiState(isLoading = false, error = error.message)
     }
 
+    /** Shared monthly dashboard projection. Never reconstruct totals in platform UI. */
+    fun loadMonthNow(monthStart: String): OverviewMonthUiState = buildMonthState(
+        LocalDate.parse(monthStart), taskRepository.list().filterNot(Task::isDeleted),
+        habitRepository.list().filterNot(Habit::isDeleted), nowProvider(), timeZoneProvider(),
+    )
+
+    /**
+     * Shared projection for any local date range `[startDate, endDateExclusive)`, so platforms can
+     * offer custom ranges without reconstructing totals in UI. Completed activity follows the actual
+     * completion date; due-date states and metrics follow the due date, like the monthly projection.
+     * Metrics compare with the preceding period of the same length.
+     */
+    fun loadRangeNow(startDate: String, endDateExclusive: String): OverviewRangeUiState = buildRangeState(
+        LocalDate.parse(startDate), LocalDate.parse(endDateExclusive), taskRepository.list().filterNot(Task::isDeleted),
+        nowProvider(), timeZoneProvider(),
+    )
+
+    internal fun buildRangeState(
+        start: LocalDate, end: LocalDate, tasks: List<Task>, now: Instant, timeZone: TimeZone,
+    ): OverviewRangeUiState {
+        val days = start.daysUntil(end)
+        require(days in 1..MAX_RANGE_DAYS) { "Range must contain 1..$MAX_RANGE_DAYS days" }
+        val today = now.toLocalDateTime(timeZone).date
+        val previousStart = start.minus(DatePeriod(days = days))
+        val visibleTasks = tasks.filterNot(Task::isDeleted).filter { task ->
+            !isCompleted(task) || task.completedAt.instantOrNull()?.let { it <= now } != false
+        }
+        val times = taskTimes(visibleTasks, timeZone)
+        fun dueIn(task: Task, from: LocalDate, until: LocalDate) =
+            times.getValue(task.uid).dueDate?.let { it >= from && it < until } == true
+        val dueInRange = visibleTasks.filter { dueIn(it, start, end) }
+        val dueInPrevious = visibleTasks.filter { dueIn(it, previousStart, start) }
+        val daily = buildDaily(visibleTasks, start, days, times, now)
+        val completedInRange = visibleTasks.filter(::isCompleted).filter { task ->
+            times.getValue(task.uid).completedDate?.let { it >= start && it < end } == true
+        }
+        val buckets = completedInRange.groupingBy { times.getValue(it.uid).completionPeriod }.eachCount()
+        val unresolved = dueInRange.filterNot { isCompleted(it) || isAbandoned(it) }
+        return OverviewRangeUiState(
+            startDate = start.toString(), endDateExclusive = end.toString(),
+            asOfDate = today.toString(), timeZoneId = timeZone.id,
+            completedCount = daily.sumOf { it.completedCount },
+            daily = daily,
+            statusDistribution = OverviewHistory(
+                completed = daily.sumOf { it.completedCount },
+                abandoned = dueInRange.count(::isAbandoned),
+                overdue = unresolved.count { times.getValue(it.uid).dueAt?.let { due -> due < now } == true },
+                pending = unresolved.count { times.getValue(it.uid).dueAt?.let { due -> due >= now } == true },
+            ),
+            completionBuckets = overviewCompletionPeriods().map { OverviewCompletionBucket(it, buckets[it] ?: 0) },
+            metrics = buildMetrics(dueInRange, dueInPrevious, times),
+            completedTaskTitles = completedInRange.map(Task::title),
+        )
+    }
+
+    private fun taskTimes(tasks: List<Task>, timeZone: TimeZone): Map<String, OverviewTaskTimes> = tasks.associate { task ->
+        val due = task.dueAt.instantOrNull()
+        val completed = task.completedAt.instantOrNull()
+        task.uid to OverviewTaskTimes(due, due?.toLocalDateTime(timeZone)?.date,
+            completed, completed?.toLocalDateTime(timeZone)?.date,
+            completed?.toOverviewCompletionPeriod(timeZone), task.startAt.instantOrNull())
+    }
+
+    internal fun buildMonthState(
+        start: LocalDate, tasks: List<Task>, habits: List<Habit>, now: Instant, timeZone: TimeZone,
+    ): OverviewMonthUiState {
+        require(start.dayOfMonth == 1) { "Expected a calendar month start" }
+        val today = now.toLocalDateTime(timeZone).date
+        require(start <= today) { "Future months are unavailable" }
+        val end = start.plus(DatePeriod(months = 1))
+        // Reuse the established shared monthly review, anchored at the following month.
+        val visibleTasks = tasks.filterNot(Task::isDeleted).filter { task ->
+            !isCompleted(task) || task.completedAt.instantOrNull()?.let { it <= now } != false
+        }
+        val times = visibleTasks.associate { task ->
+            val due = task.dueAt.instantOrNull()
+            val completed = task.completedAt.instantOrNull()
+            task.uid to OverviewTaskTimes(due, due?.toLocalDateTime(timeZone)?.date,
+                completed, completed?.toLocalDateTime(timeZone)?.date,
+                completed?.toOverviewCompletionPeriod(timeZone), task.startAt.instantOrNull())
+        }
+        val review = buildLastMonth(visibleTasks, end, times, now)
+        // Completed activity follows completion date; other mutually exclusive states follow due date.
+        val dueThisMonth = visibleTasks.filter { times.getValue(it.uid).dueDate?.let { it >= start && it < end } == true }
+        val unresolved = dueThisMonth.filterNot { isCompleted(it) || isAbandoned(it) }
+        val statusDistribution = OverviewHistory(
+            completed = review.daily.sumOf { it.completedCount },
+            abandoned = dueThisMonth.count(::isAbandoned),
+            overdue = unresolved.count { times.getValue(it.uid).dueAt?.let { due -> due < now } == true },
+            pending = unresolved.count { times.getValue(it.uid).dueAt?.let { due -> due >= now } == true },
+        )
+        return OverviewMonthUiState(
+            monthStart = start.toString(), endDateExclusive = end.toString(),
+            asOfDate = today.toString(), timeZoneId = timeZone.id,
+            completedCount = review.daily.sumOf { it.completedCount }, daily = review.daily,
+            review = review,
+            archivedTaskCount = tasks.count { !it.isDeleted && isArchived(it) },
+            archivedHabitCount = habits.count { !it.isDeleted && it.status == HabitStatus.ARCHIVED },
+            statusDistribution = statusDistribution,
+        )
+    }
+
     internal fun buildState(
         tasks: List<Task>,
         habits: List<Habit>,
@@ -131,29 +235,22 @@ class OverviewViewModel(
             .take(5)
         val activeHabits = habits.filter { it.status == HabitStatus.ACTIVE }
         val habitProgress = activeHabits.map { habit ->
-            val completed = habitRecords
-                .asSequence()
-                .filter { record ->
-                    record.habitUid == habit.uid &&
-                        record.occurredOn == today.toString() &&
-                        record.status == HabitRecordStatus.COMPLETED
-                }
-                .sumOf(HabitRecord::count)
-            val target = habit.timesPerPeriod.coerceAtLeast(1)
+            val computed = HabitProgressEngine.progress(habit, habitRecords, today)
             HabitProgress(
                 habit = habit,
-                completedToday = completed,
-                targetToday = target,
-                progress = (completed.toFloat() / target).coerceIn(0f, 1f),
+                completedToday = computed.completedCount,
+                targetToday = computed.targetCount,
+                progress = computed.fraction.toFloat(),
             )
         }
+        val habitDayOverview = HabitProgressEngine.dayOverview(activeHabits, habitRecords, today)
         val legacyStats = OverviewStats(
             activeTasks = tasks.count { it.state == TaskState.ACTIVE },
             completedTasks = completed.size,
             archivedTasks = tasks.count(::isArchived),
             totalTasks = tasks.size,
             activeHabits = activeHabits.size,
-            completedHabitsToday = habitProgress.count { it.completedToday >= it.targetToday },
+            completedHabitsToday = habitDayOverview.completedHabitCount,
             habitProgress = habitProgress,
         )
 
@@ -390,5 +487,8 @@ private fun Instant.toOverviewCompletionPeriod(timeZone: TimeZone): OverviewComp
 }
 
 private fun overviewLog(message: String) {
-    println("[KMP][Overview] $message")
+    PlatformLogger().d("overview", message)
 }
+
+/** Upper bound for custom overview ranges (about ten years). */
+private const val MAX_RANGE_DAYS = 3660

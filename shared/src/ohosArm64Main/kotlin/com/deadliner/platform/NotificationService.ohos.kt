@@ -16,41 +16,41 @@ actual class NotificationService : NotificationGateway {
     actual override fun setTaskNotification(config: TaskNotificationConfig) {
         // 使用 reminderAgentManager 的 Timer 类型
         // 在实际实现中，需要通过 bridge 层调用原生 API
-        println("[HarmonyOS] setTaskNotification: ${config.taskUid}")
+        PlatformLogger().i("notification", "[notification.task.set] uid=${config.taskUid}")
     }
 
     actual override fun cancelTaskNotification(taskUid: String) {
-        println("[HarmonyOS] cancelTaskNotification: $taskUid")
+        PlatformLogger().i("notification", "[notification.task.cancel] uid=$taskUid")
     }
 
     actual override fun cancelAllTaskNotifications() {
-        println("[HarmonyOS] cancelAllTaskNotifications")
+        PlatformLogger().i("notification", "[notification.task.cancel-all]")
     }
 
     // ===== 习惯通知 =====
 
     actual override fun setHabitNotification(config: HabitNotificationConfig) {
         // 使用 reminderAgentManager 的 Alarm 类型（循环提醒）
-        println("[HarmonyOS] setHabitNotification: ${config.habitUid}")
+        PlatformLogger().i("notification", "[notification.habit.set] uid=${config.habitUid}")
     }
 
     actual override fun cancelHabitNotification(habitUid: String) {
-        println("[HarmonyOS] cancelHabitNotification: $habitUid")
+        PlatformLogger().i("notification", "[notification.habit.cancel] uid=$habitUid")
     }
 
     actual override fun cancelAllHabitNotifications() {
-        println("[HarmonyOS] cancelAllHabitNotifications")
+        PlatformLogger().i("notification", "[notification.habit.cancel-all]")
     }
 
     // ===== 每日统计通知 =====
 
     actual override fun setDailySummaryNotification(config: DailySummaryConfig) {
         // 使用 reminderAgentManager 的 Alarm 类型（循环提醒）
-        println("[HarmonyOS] setDailySummaryNotification")
+        PlatformLogger().i("notification", "[notification.daily-summary.set]")
     }
 
     actual override fun cancelDailySummaryNotification() {
-        println("[HarmonyOS] cancelDailySummaryNotification")
+        PlatformLogger().i("notification", "[notification.daily-summary.cancel]")
     }
 
     // ===== 即将到期实时更新（HarmonyOS 不支持，no-op）=====
@@ -66,7 +66,7 @@ actual class NotificationService : NotificationGateway {
     // ===== 通用 =====
 
     actual override fun cancelAll() {
-        println("[HarmonyOS] cancelAll")
+        PlatformLogger().i("notification", "[notification.cancel-all]")
     }
 
     actual override fun refreshAll(tasks: List<TaskNotificationInfo>, habits: List<HabitNotificationInfo>) {

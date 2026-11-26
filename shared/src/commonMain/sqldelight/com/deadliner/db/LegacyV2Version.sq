@@ -11,3 +11,6 @@ selectVersionsForKind:
 SELECT entity_uid, ts, ctr, dev
 FROM legacy_v2_version
 WHERE entity_kind = ?;
+
+deleteAll:
+DELETE FROM legacy_v2_version;

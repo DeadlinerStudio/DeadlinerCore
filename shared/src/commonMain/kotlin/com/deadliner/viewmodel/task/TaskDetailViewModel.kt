@@ -3,6 +3,7 @@ package com.deadliner.viewmodel.task
 import com.deadliner.db.repository.TaskRepository
 import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskAction
+import com.deadliner.domain.task.TaskActionOutcome
 import com.deadliner.domain.task.TaskSubtask
 import com.deadliner.platform.PlatformIdentity
 import com.deadliner.service.NotificationOrchestrator
@@ -84,9 +85,13 @@ class TaskDetailViewModel(
         scope.launch {
             try {
                 val result = taskRepository.applyAction(taskUid, action, Clock.System.now().toString())
-                result.task?.let { task ->
+                if (result.outcome == TaskActionOutcome.APPLIED) result.task?.let { task ->
                     notificationOrchestrator?.onTaskUpdated(task)
-                    _uiState.update { it.copy(task = task, error = null) }
+                    _uiState.update {
+                        it.copy(task = task, error = null, lastActionOutcome = result.outcome)
+                    }
+                } else {
+                    _uiState.update { it.copy(error = null, lastActionOutcome = result.outcome) }
                 }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = e.message) }
@@ -146,12 +151,46 @@ class TaskDetailViewModel(
     fun deleteSubtask(subtaskUid: String) {
         scope.launch {
             try {
-                val currentTask = _uiState.value.task ?: return@launch
-                val updatedSubtasks = currentTask.subtasks.filter { it.uid != subtaskUid }
-                val updatedTask = currentTask.copy(subtasks = updatedSubtasks)
-                taskRepository.update(updatedTask)
-                notificationOrchestrator?.onTaskUpdated(updatedTask)
-                _uiState.update { it.copy(task = updatedTask, error = null) }
+                val result = taskRepository.deleteSubtask(taskUid, subtaskUid, Clock.System.now().toString())
+                result.task?.let { updatedTask ->
+                    if (result.outcome == TaskActionOutcome.APPLIED) {
+                        notificationOrchestrator?.onTaskUpdated(updatedTask)
+                    }
+                    _uiState.update { it.copy(task = updatedTask, error = null) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = e.message) }
+            }
+        }
+    }
+
+    fun updateSubtaskContent(subtaskUid: String, content: String) {
+        val normalized = content.trim()
+        if (normalized.isEmpty()) return
+        updateTask { task ->
+            task.copy(subtasks = task.subtasks.map { subtask ->
+                if (subtask.uid == subtaskUid) {
+                    subtask.copy(content = normalized, updatedAt = Clock.System.now().toString())
+                } else subtask
+            })
+        }
+    }
+
+    fun setStarred(isStarred: Boolean) {
+        updateTask { it.copy(isStarred = isStarred, updatedAt = Clock.System.now().toString()) }
+    }
+
+    fun setCalendarEventId(calendarEventId: Long?) {
+        updateTask { it.copy(calendarEventId = calendarEventId, updatedAt = Clock.System.now().toString()) }
+    }
+
+    private fun updateTask(transform: (Task) -> Task) {
+        scope.launch {
+            try {
+                val updated = transform(_uiState.value.task ?: return@launch)
+                taskRepository.update(updated)
+                notificationOrchestrator?.onTaskUpdated(updated)
+                _uiState.update { it.copy(task = updated, error = null) }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = e.message) }
             }
@@ -162,9 +201,15 @@ class TaskDetailViewModel(
     fun deleteTask() {
         scope.launch {
             try {
-                taskRepository.delete(taskUid, Clock.System.now().toString())
-                notificationOrchestrator?.onTaskDeleted(taskUid)
-                _uiState.update { it.copy(task = null, error = null) }
+                val result = taskRepository.delete(taskUid, Clock.System.now().toString())
+                if (result.outcome == TaskActionOutcome.APPLIED) {
+                    notificationOrchestrator?.onTaskDeleted(taskUid)
+                    _uiState.update {
+                        it.copy(task = null, error = null, lastActionOutcome = result.outcome)
+                    }
+                } else {
+                    _uiState.update { it.copy(error = null, lastActionOutcome = result.outcome) }
+                }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = e.message) }
             }
@@ -177,6 +222,7 @@ data class TaskDetailUiState(
     val task: Task? = null,
     val isLoading: Boolean = true,
     val error: String? = null,
+    val lastActionOutcome: TaskActionOutcome? = null,
 )
 
 // ===== 子任务配置对象 =====

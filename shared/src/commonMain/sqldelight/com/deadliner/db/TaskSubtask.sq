@@ -16,3 +16,6 @@ WHERE uid = ?;
 
 softDeleteSubtask:
 UPDATE task_subtask SET is_deleted = 1, updated_at = ? WHERE uid = ?;
+
+deleteAll:
+DELETE FROM task_subtask;

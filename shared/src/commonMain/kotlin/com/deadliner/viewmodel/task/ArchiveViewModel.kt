@@ -2,6 +2,7 @@ package com.deadliner.viewmodel.task
 
 import com.deadliner.db.repository.TaskRepository
 import com.deadliner.domain.task.Task
+import com.deadliner.domain.task.TaskActionOutcome
 import com.deadliner.domain.task.TaskState
 import com.deadliner.service.NotificationOrchestrator
 import kotlinx.coroutines.CoroutineScope
@@ -62,15 +63,18 @@ class ArchiveViewModel(
         scope.launch {
             try {
                 val result = taskRepository.applyAction(uid, com.deadliner.domain.task.TaskAction.UNARCHIVE, Clock.System.now().toString())
-                result.task?.let { task ->
+                if (result.outcome == TaskActionOutcome.APPLIED) result.task?.let { task ->
                     notificationOrchestrator?.onTaskUpdated(task)
                     // 从列表中移除已取消归档的任务
                     _uiState.update { state ->
                         state.copy(
                             tasks = state.tasks.filter { it.uid != uid },
                             error = null,
+                            lastActionOutcome = result.outcome,
                         )
                     }
+                } else {
+                    _uiState.update { it.copy(error = null, lastActionOutcome = result.outcome) }
                 }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = e.message) }
@@ -82,13 +86,18 @@ class ArchiveViewModel(
     fun deleteTask(uid: String) {
         scope.launch {
             try {
-                taskRepository.delete(uid, Clock.System.now().toString())
-                notificationOrchestrator?.onTaskDeleted(uid)
-                _uiState.update { state ->
-                    state.copy(
-                        tasks = state.tasks.filter { it.uid != uid },
-                        error = null,
-                    )
+                val result = taskRepository.delete(uid, Clock.System.now().toString())
+                if (result.outcome == TaskActionOutcome.APPLIED) {
+                    notificationOrchestrator?.onTaskDeleted(uid)
+                    _uiState.update { state ->
+                        state.copy(
+                            tasks = state.tasks.filter { it.uid != uid },
+                            error = null,
+                            lastActionOutcome = result.outcome,
+                        )
+                    }
+                } else {
+                    _uiState.update { it.copy(error = null, lastActionOutcome = result.outcome) }
                 }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = e.message) }
@@ -102,4 +111,5 @@ data class ArchiveUiState(
     val tasks: List<Task> = emptyList(),
     val isLoading: Boolean = true,
     val error: String? = null,
+    val lastActionOutcome: TaskActionOutcome? = null,
 )

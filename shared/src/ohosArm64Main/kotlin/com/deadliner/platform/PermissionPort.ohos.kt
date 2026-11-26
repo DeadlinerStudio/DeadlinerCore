@@ -8,19 +8,19 @@ package com.deadliner.platform
 actual class PermissionPort {
     actual suspend fun checkPermission(type: PermissionType): PermissionStatus {
         // 检查权限状态
-        println("[HarmonyOS] checkPermission: $type")
+        PlatformLogger().i("permission", "[permission.check] type=$type")
         return PermissionStatus.NOT_DETERMINED
     }
 
     actual suspend fun requestPermission(type: PermissionType): Boolean {
         // 请求权限
-        println("[HarmonyOS] requestPermission: $type")
+        PlatformLogger().i("permission", "[permission.request] type=$type")
         return false
     }
 
     actual suspend fun shouldShowRationale(type: PermissionType): Boolean {
         // 检查是否应该显示权限说明
-        println("[HarmonyOS] shouldShowRationale: $type")
+        PlatformLogger().i("permission", "[permission.rationale] type=$type")
         return false
     }
 }

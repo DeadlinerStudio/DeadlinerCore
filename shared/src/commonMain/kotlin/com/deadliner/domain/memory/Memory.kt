@@ -1,6 +1,4 @@
 package com.deadliner.domain.memory
-
-import com.deadliner.domain.account.UserProfile
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -18,5 +16,5 @@ data class MemoryFragment(
 data class MemorySnapshot(
     val revision: Long,
     val fragments: List<MemoryFragment>,
-    val userProfile: UserProfile? = null,
+    val userProfile: String? = null,
 )

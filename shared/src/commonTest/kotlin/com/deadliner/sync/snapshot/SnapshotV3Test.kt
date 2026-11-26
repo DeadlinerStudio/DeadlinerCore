@@ -1,6 +1,13 @@
 package com.deadliner.sync.snapshot
 
 import com.deadliner.domain.category.Category
+import com.deadliner.domain.focus.FocusCompletionKind
+import com.deadliner.domain.focus.FocusSession
+import com.deadliner.domain.focus.FocusTimerMode
+import com.deadliner.domain.habit.HabitGoalWindow
+import com.deadliner.domain.habit.HabitScheduleKind
+import com.deadliner.domain.habit.HabitTrackingMode
+import com.deadliner.domain.habit.HabitWeekdays
 import com.deadliner.domain.task.Task
 import com.deadliner.sync.snapshot.v2.SnapshotV2MigrationInput
 import com.deadliner.sync.snapshot.v2.SnapshotV2Migrator
@@ -34,6 +41,24 @@ class SnapshotV3Test {
                     ver = SnapshotV3EntityVersion("2026-07-18T12:00:00Z", 3, "mac"),
                     deleted = false,
                     doc = Task(uid = "task.1", title = "Ship v3", createdAt = "created", updatedAt = "updated"),
+                ),
+            ),
+            focusSessions = listOf(
+                SnapshotV3FocusSessionItem(
+                    uid = "focus.1",
+                    ver = SnapshotV3EntityVersion("2026-07-18T12:20:00Z", 1, "mac"),
+                    deleted = false,
+                    doc = FocusSession(
+                        uid = "focus.1",
+                        taskUid = "task.1",
+                        taskTitleSnapshot = "Ship v3",
+                        mode = FocusTimerMode.STOPWATCH,
+                        startedAt = "2026-07-18T12:00:00Z",
+                        endedAt = "2026-07-18T12:20:00Z",
+                        durationSeconds = 1_200,
+                        completionKind = FocusCompletionKind.FOCUS_ONLY,
+                        createdAt = "2026-07-18T12:20:00Z",
+                    ),
                 ),
             ),
         )
@@ -87,6 +112,12 @@ class SnapshotV3Test {
         assertEquals("task.1", task.subtasks.single().taskUid)
         val habit = assertNotNull(result.snapshot.habits.single().doc)
         assertEquals("Read", habit.habit.name)
+        assertEquals(HabitScheduleKind.WEEKLY_DAYS, habit.habit.schedule.kind)
+        assertEquals(HabitWeekdays.ALL, habit.habit.schedule.weekdaysMask)
+        assertEquals(HabitGoalWindow.WEEK, habit.habit.goal.window)
+        assertEquals(2, habit.habit.goal.targetCount)
+        assertEquals(HabitTrackingMode.QUANTITY, habit.habit.tracking.mode)
+        assertEquals("09:00", habit.habit.reminder?.localTime)
         assertEquals("habit.1", habit.records.single().habitUid)
         assertTrue(result.issues.any { it.uid == "habit.1" && it.code.name == "LEGACY_HABIT_CARRIER_SKIPPED" })
         assertTrue(result.issues.any { it.uid == "unknown.deleted" && it.code.name == "AMBIGUOUS_TOMBSTONE_ASSUMED_TASK" })
@@ -111,6 +142,11 @@ class SnapshotV3Test {
         assertEquals("WEEKLY", document.habit.period.name)
         assertEquals("PER_PERIOD", document.habit.goalType.name)
         assertEquals(3, document.habit.timesPerPeriod)
+        assertEquals(HabitScheduleKind.WEEKLY_DAYS, document.habit.schedule.kind)
+        assertEquals(HabitWeekdays.ALL, document.habit.schedule.weekdaysMask)
+        assertEquals(HabitGoalWindow.WEEK, document.habit.goal.window)
+        assertEquals(3, document.habit.goal.targetCount)
+        assertEquals(HabitTrackingMode.QUANTITY, document.habit.tracking.mode)
         assertTrue(result.issues.any { it.code.name == "LEGACY_HABIT_CARRIER_FALLBACK" })
     }
 }

@@ -19,3 +19,6 @@ UPDATE memory_fragment SET content = ?, category = ?, importance = ?, updated_at
 
 softDeleteMemory:
 UPDATE memory_fragment SET is_deleted = 1, updated_at = ? WHERE uid = ?;
+
+deleteAll:
+DELETE FROM memory_fragment;

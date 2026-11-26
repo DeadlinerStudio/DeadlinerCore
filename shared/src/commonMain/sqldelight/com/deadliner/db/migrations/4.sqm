@@ -1,0 +1,99 @@
+-- v4 -> v5: Habit becomes an independent schedule/goal/tracking aggregate.
+PRAGMA foreign_keys = 0;
+
+CREATE TABLE habit_v5 (
+    uid TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    color INTEGER,
+    icon_key TEXT,
+    category_uid TEXT REFERENCES category(uid) ON DELETE SET NULL,
+    schedule_kind TEXT NOT NULL,
+    schedule_start_on TEXT NOT NULL,
+    schedule_end_on TEXT,
+    schedule_weekdays_mask INTEGER,
+    schedule_algorithm_key TEXT,
+    goal_window TEXT NOT NULL,
+    goal_target_count INTEGER NOT NULL,
+    tracking_mode TEXT NOT NULL,
+    tracking_unit TEXT,
+    tracking_default_increment INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    reminder_local_time TEXT,
+    reminder_enabled INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+INSERT INTO habit_v5 (
+    uid, name, description, color, icon_key, category_uid, schedule_kind, schedule_start_on, schedule_end_on,
+    schedule_weekdays_mask, schedule_algorithm_key, goal_window, goal_target_count, tracking_mode, tracking_unit,
+    tracking_default_increment, status, sort_order, reminder_local_time, reminder_enabled, created_at, updated_at, is_deleted
+)
+SELECT
+    uid, name, description, color, icon_key, category_uid,
+    CASE WHEN period = 'EBBINGHAUS' THEN 'ALGORITHM' WHEN period = 'ONCE' THEN 'ONCE' ELSE 'WEEKLY_DAYS' END,
+    CASE
+        WHEN length(created_at) >= 10 THEN substr(created_at, 1, 10)
+        ELSE date('now', 'localtime')
+    END,
+    NULL,
+    CASE WHEN period IN ('EBBINGHAUS', 'ONCE') THEN NULL ELSE 127 END,
+    CASE WHEN period = 'EBBINGHAUS' THEN 'EBBINGHAUS_CLASSIC_V1' ELSE NULL END,
+    CASE
+        WHEN goal_type = 'TOTAL' THEN 'LIFETIME'
+        WHEN period = 'WEEKLY' THEN 'WEEK'
+        WHEN period = 'MONTHLY' THEN 'MONTH'
+        ELSE 'SCHEDULED_DAY'
+    END,
+    CASE
+        WHEN goal_type = 'TOTAL' THEN MAX(
+            COALESCE(
+                total_target,
+                (SELECT SUM(r.count) FROM habit_record r
+                 WHERE r.habit_uid = habit.uid AND r.status = 'COMPLETED' AND r.is_deleted = 0),
+                times_per_period,
+                1
+            ),
+            1
+        )
+        WHEN period = 'EBBINGHAUS' THEN 1
+        ELSE MAX(times_per_period, 1)
+    END,
+    CASE
+        WHEN period = 'EBBINGHAUS' THEN 'CHECK_OFF'
+        WHEN (CASE WHEN goal_type = 'TOTAL' THEN COALESCE(
+            total_target,
+            (SELECT SUM(r.count) FROM habit_record r
+             WHERE r.habit_uid = habit.uid AND r.status = 'COMPLETED' AND r.is_deleted = 0),
+            times_per_period,
+            1
+        ) ELSE times_per_period END) = 1
+        THEN 'CHECK_OFF' ELSE 'QUANTITY'
+    END,
+    NULL,
+    1,
+    status, sort_order, reminder_local_time, reminder_enabled, created_at, updated_at, is_deleted
+FROM habit;
+
+DROP INDEX idx_habit_category;
+DROP TABLE habit;
+ALTER TABLE habit_v5 RENAME TO habit;
+CREATE INDEX idx_habit_category ON habit(is_deleted, category_uid, sort_order);
+
+CREATE TABLE migration_diagnostic (
+    diagnostic_key TEXT NOT NULL PRIMARY KEY,
+    diagnostic_value INTEGER NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+
+INSERT INTO migration_diagnostic (diagnostic_key, diagnostic_value, recorded_at)
+SELECT 'habit_schedule_item_discarded_v5', COUNT(*), datetime('now')
+FROM habit_schedule_item;
+
+DROP INDEX idx_habit_schedule_habit;
+DROP TABLE habit_schedule_item;
+
+PRAGMA foreign_keys = 1;

@@ -4,6 +4,7 @@ import com.deadliner.db.AppDatabase
 import com.deadliner.domain.account.UserProfile
 import com.deadliner.domain.account.UserTier
 import com.deadliner.model.ChangeOperation
+import com.deadliner.sync.RepositoryMutationNotifier
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -12,6 +13,7 @@ class UserProfileRepository(
     private val database: AppDatabase,
     private val changeLog: ChangeLogRepository,
     private val json: Json = Json,
+    private val mutationNotifier: RepositoryMutationNotifier = RepositoryMutationNotifier.NONE,
 ) {
     fun list(): List<UserProfile> = database.userProfileQueries.selectAll(::toProfile).executeAsList()
 
@@ -27,28 +29,7 @@ class UserProfileRepository(
             database.userProfileQueries.softDeleteUserProfile(updatedAt, uid)
             changeLog.appendLocal("user_profile", uid, ChangeOperation.DELETE, null)
         }
-    }
-
-    fun getProfile(): String? {
-        val profiles = list()
-        return profiles.firstOrNull()?.nickname?.ifBlank { null }
-    }
-
-    fun updateProfile(profileText: String) {
-        val existing = list().firstOrNull()
-        val now = currentTimestamp()
-        if (existing != null) {
-            update(existing.copy(nickname = profileText, updatedAt = now))
-        } else {
-            create(
-                com.deadliner.domain.account.UserProfile(
-                    uid = generateUid(),
-                    nickname = profileText,
-                    createdAt = now,
-                    updatedAt = now,
-                )
-            )
-        }
+        mutationNotifier.notifyMutation()
     }
 
     private fun save(profile: UserProfile, operation: ChangeOperation) {
@@ -63,16 +44,10 @@ class UserProfileRepository(
             )
             changeLog.appendLocal("user_profile", profile.uid, operation, json.encodeToJsonElement(profile).jsonObject)
         }
+        mutationNotifier.notifyMutation()
     }
 
     private fun toProfile(
         uid: String, nickname: String, avatarFileName: String?, tier: String, createdAt: String, updatedAt: String, isDeleted: Long,
     ) = UserProfile(uid, nickname, avatarFileName, UserTier.valueOf(tier), createdAt, updatedAt, isDeleted.asBoolean())
 }
-
-private fun currentTimestamp(): String =
-    kotlinx.datetime.Clock.System.now().toString()
-
-@OptIn(kotlin.uuid.ExperimentalUuidApi::class)
-private fun generateUid(): String =
-    kotlin.uuid.Uuid.random().toString()

@@ -64,3 +64,15 @@ dependencyResolutionManagement {
 
 rootProject.name = "deadliner-kmp"
 include(":shared")
+
+// Set Native home before KGP applies: its Native property service memoizes early.
+// The overlay repairs one fingerprint-guarded CPF exception-frame codegen defect.
+val nativeRootFixScript = File(settingsDir, "runscript/native/shadow-stack-toolchain.gradle.kts")
+val nativeRootFixVersion = Regex("(?m)^kotlin\\s*=\\s*\"([^\"]+)\"")
+    .find(File(settingsDir, "gradle/libs.versions.toml").readText())!!.groupValues[1]
+gradle.beforeProject {
+    if (path == ":shared") {
+        extra["deadlinerNativeToolchainVersion"] = nativeRootFixVersion
+        apply(from = nativeRootFixScript)
+    }
+}

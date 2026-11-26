@@ -57,6 +57,7 @@ enum class TaskActionOutcome {
     NO_OP,
     INVALID,
     NOT_FOUND,
+    TIMER_REQUIRES_RESOLUTION,
 }
 
 object TaskStateMachine {

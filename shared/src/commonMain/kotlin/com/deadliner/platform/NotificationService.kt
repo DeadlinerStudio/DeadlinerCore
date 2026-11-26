@@ -11,6 +11,9 @@ import kotlinx.datetime.DayOfWeek
  * - HarmonyOS: reminderAgentManager
  */
 interface NotificationGateway {
+    /** Optional fixed-rule metadata path; legacy native hosts retain their existing methods. */
+    fun applyNotificationMetadata(metadata: NotificationMetadata) {}
+
     // ===== 任务通知 =====
 
     /** 设置任务到期提醒 */
@@ -96,6 +99,9 @@ data class HabitNotificationConfig(
     val name: String,
     val alarmTime: String,  // HH:mm 格式
     val daysOfWeek: List<DayOfWeek> = DayOfWeek.entries,
+    /** Concrete local occurrences derived by KMP; platform code must not reimplement recurrence. */
+    val scheduledLocalDateTimes: List<String> = emptyList(),
+    val isScheduleAuthoritative: Boolean = false,
 )
 
 /** 每日统计配置 */
@@ -110,8 +116,14 @@ data class UpcomingLiveUpdateConfig(
     val taskUid: String,
     val title: String,
     val dueAt: String,
+    val advanceMinutes: Int = 10,
     val updateIntervalSeconds: Int = 30,  // 更新间隔
-)
+) {
+    init {
+        require(advanceMinutes >= 0) { "advanceMinutes must not be negative" }
+        require(updateIntervalSeconds > 0) { "updateIntervalSeconds must be positive" }
+    }
+}
 
 /** 通知优先级（密封类，编译时类型安全） */
 enum class NotificationPriority {

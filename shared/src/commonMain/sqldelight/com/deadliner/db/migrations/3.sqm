@@ -1,0 +1,6 @@
+-- v3 -> v4: LiFi's inferred user profile is Memory state, not Settings account state.
+CREATE TABLE memory_user_profile (
+    singleton_id INTEGER NOT NULL PRIMARY KEY CHECK (singleton_id = 1),
+    content TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);

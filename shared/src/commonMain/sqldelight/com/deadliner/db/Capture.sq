@@ -23,3 +23,6 @@ UPDATE capture_item SET text = ?, source = ?, updated_at = ?, is_consumed = ?, i
 
 softDeleteCapture:
 UPDATE capture_item SET is_deleted = 1, updated_at = ? WHERE uid = ?;
+
+deleteAll:
+DELETE FROM capture_item;

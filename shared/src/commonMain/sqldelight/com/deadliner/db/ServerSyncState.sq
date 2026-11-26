@@ -1,0 +1,125 @@
+CREATE TABLE server_sync_scope (
+    scope_id TEXT NOT NULL PRIMARY KEY,
+    cursor INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE server_sync_entity_state (
+    scope_id TEXT NOT NULL REFERENCES server_sync_scope(scope_id) ON DELETE CASCADE,
+    entity_kind TEXT NOT NULL,
+    entity_uid TEXT NOT NULL,
+    server_change_id INTEGER NOT NULL,
+    client_version_ts TEXT NOT NULL,
+    client_version_ctr INTEGER NOT NULL,
+    client_version_dev TEXT NOT NULL,
+    PRIMARY KEY (scope_id, entity_kind, entity_uid)
+);
+
+CREATE TABLE server_sync_outbox (
+    scope_id TEXT NOT NULL REFERENCES server_sync_scope(scope_id) ON DELETE CASCADE,
+    mutation_id TEXT NOT NULL,
+    entity_kind TEXT NOT NULL,
+    entity_uid TEXT NOT NULL,
+    action TEXT NOT NULL,
+    base_change_id INTEGER NOT NULL,
+    client_version_ts TEXT NOT NULL,
+    client_version_ctr INTEGER NOT NULL,
+    client_version_dev TEXT NOT NULL,
+    payload_json TEXT,
+    created_at TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    PRIMARY KEY (scope_id, mutation_id),
+    UNIQUE (scope_id, entity_kind, entity_uid)
+);
+
+CREATE INDEX idx_server_sync_entity_change
+ON server_sync_entity_state(scope_id, server_change_id);
+
+CREATE INDEX idx_server_sync_outbox_order
+ON server_sync_outbox(scope_id, created_at, mutation_id);
+
+ensureScope:
+INSERT OR IGNORE INTO server_sync_scope (scope_id, cursor, updated_at)
+VALUES (:scope_id, 0, :updated_at);
+
+selectScope:
+SELECT scope_id, cursor, updated_at
+FROM server_sync_scope
+WHERE scope_id = :scope_id;
+
+updateCursor:
+UPDATE server_sync_scope
+SET cursor = :cursor, updated_at = :updated_at
+WHERE scope_id = :scope_id AND server_sync_scope.cursor <= :cursor;
+
+selectEntityState:
+SELECT scope_id, entity_kind, entity_uid, server_change_id,
+       client_version_ts, client_version_ctr, client_version_dev
+FROM server_sync_entity_state
+WHERE scope_id = :scope_id AND entity_kind = :entity_kind AND entity_uid = :entity_uid;
+
+selectEntityStates:
+SELECT scope_id, entity_kind, entity_uid, server_change_id,
+       client_version_ts, client_version_ctr, client_version_dev
+FROM server_sync_entity_state
+WHERE scope_id = :scope_id;
+
+upsertEntityState:
+INSERT OR REPLACE INTO server_sync_entity_state (
+    scope_id, entity_kind, entity_uid, server_change_id,
+    client_version_ts, client_version_ctr, client_version_dev
+) VALUES (?, ?, ?, ?, ?, ?, ?);
+
+selectOutboxForEntity:
+SELECT scope_id, mutation_id, entity_kind, entity_uid, action, base_change_id,
+       client_version_ts, client_version_ctr, client_version_dev, payload_json,
+       created_at, attempt_count, last_error
+FROM server_sync_outbox
+WHERE scope_id = :scope_id AND entity_kind = :entity_kind AND entity_uid = :entity_uid;
+
+selectOutbox:
+SELECT scope_id, mutation_id, entity_kind, entity_uid, action, base_change_id,
+       client_version_ts, client_version_ctr, client_version_dev, payload_json,
+       created_at, attempt_count, last_error
+FROM server_sync_outbox
+WHERE scope_id = :scope_id
+ORDER BY created_at ASC, mutation_id ASC
+LIMIT :limit;
+
+selectAllOutbox:
+SELECT scope_id, mutation_id, entity_kind, entity_uid, action, base_change_id,
+       client_version_ts, client_version_ctr, client_version_dev, payload_json,
+       created_at, attempt_count, last_error
+FROM server_sync_outbox
+WHERE scope_id = :scope_id;
+
+upsertOutbox:
+INSERT OR REPLACE INTO server_sync_outbox (
+    scope_id, mutation_id, entity_kind, entity_uid, action, base_change_id,
+    client_version_ts, client_version_ctr, client_version_dev, payload_json,
+    created_at, attempt_count, last_error
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL);
+
+markOutboxAttempt:
+UPDATE server_sync_outbox
+SET attempt_count = attempt_count + 1, last_error = :last_error
+WHERE scope_id = :scope_id AND mutation_id = :mutation_id;
+
+deleteOutboxMutation:
+DELETE FROM server_sync_outbox
+WHERE scope_id = :scope_id AND mutation_id = :mutation_id;
+
+countOutbox:
+SELECT COUNT(*)
+FROM server_sync_outbox
+WHERE scope_id = :scope_id;
+
+deleteAllOutbox:
+DELETE FROM server_sync_outbox;
+
+deleteAllEntityStates:
+DELETE FROM server_sync_entity_state;
+
+deleteAllScopes:
+DELETE FROM server_sync_scope;

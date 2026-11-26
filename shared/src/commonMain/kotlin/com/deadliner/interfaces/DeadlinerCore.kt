@@ -1,80 +1,34 @@
 package com.deadliner.interfaces
 
-import com.deadliner.domain.ai.model.AIConfig
-import com.deadliner.domain.ai.model.CoreEvent
-import com.deadliner.domain.ai.model.MixedResult
-import com.deadliner.domain.ai.port.AgentOrchestrator
-import com.deadliner.domain.ai.port.PendingToolCallRegistry
-import com.deadliner.domain.ai.port.ToolExecutor
-import com.deadliner.domain.ai.port.ToolContinuationExecutor
-import com.deadliner.domain.ai.port.ToolContinuationResult
-import com.deadliner.domain.ai.port.ToolResult
-import kotlinx.coroutines.flow.MutableSharedFlow
+import com.deadliner.domain.ai.agent.*
+import com.deadliner.domain.ai.model.*
+import com.deadliner.domain.ai.port.*
 import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.datetime.Clock
 
-class DeadlinerCore(
-    private val config: AIConfig,
-    private val orchestrator: AgentOrchestrator,
-    private val toolExecutor: ToolExecutor,
-) {
-    private val _events = MutableSharedFlow<CoreEvent>(extraBufferCapacity = 64)
-    val events: SharedFlow<CoreEvent> = _events.asSharedFlow()
-
-    suspend fun processInput(text: String) {
-        val requestId = generateRequestId()
-        _events.emit(CoreEvent.OnLifecycle(requestId, "started", "running"))
-
-        try {
-            _events.emit(CoreEvent.OnThinking("Supervisor", "routing"))
-            val result = orchestrator.processMessage(text)
-            handleMixedResult(requestId, result, originalText = text)
-        } catch (e: Exception) {
-            _events.emit(CoreEvent.OnError(e.message ?: "Unknown error"))
-            _events.emit(CoreEvent.OnLifecycle(requestId, "failed", "error", e.message))
-        }
-    }
-
-    suspend fun submitToolResult(toolCallId: String, result: ToolResult) {
-        try {
-            val continuation = if (toolExecutor is ToolContinuationExecutor) {
-                toolExecutor.submitToolResultWithContext(toolCallId, result)
-            } else {
-                ToolContinuationResult(
-                    originalText = "",
-                    result = toolExecutor.submitToolResult(toolCallId, result),
-                )
-            }
-            handleMixedResult(toolCallId, continuation.result, continuation.originalText)
-        } catch (e: Exception) {
-            _events.emit(CoreEvent.OnError(e.message ?: "Tool execution failed"))
-        }
-    }
-
-    private suspend fun handleMixedResult(
-        requestId: String,
-        result: MixedResult,
-        originalText: String,
-    ) {
-        if (result.toolCalls.isNotEmpty()) {
-            result.toolCalls.forEachIndexed { index, call ->
-                // The index keeps repeated identical tool calls from replacing
-                // each other's pending context within one AI response.
-                val callId = "${requestId}_${index}_${call.hashCode()}"
-                (orchestrator as? PendingToolCallRegistry)?.registerPendingToolCall(
-                    toolCallId = callId,
-                    toolCall = call,
-                    originalText = originalText,
-                )
-                _events.emit(CoreEvent.OnToolRequest(callId, call, call.executionMode))
-            }
-        } else {
-            _events.emit(CoreEvent.OnFinish(result))
-            _events.emit(CoreEvent.OnLifecycle(requestId, "completed", "success"))
-        }
-    }
-
-    private fun generateRequestId(): String =
-        "req_${Clock.System.now().toEpochMilliseconds()}"
+/** Public AI session contract; implementations are selected at build time. */
+interface LifiRuntime : AutoCloseable {
+    val events: SharedFlow<CoreEvent>
+    suspend fun replayEvents(afterSeq: Long): AgentEventReplay
+    suspend fun executeApprovedTool(actionId: String, confirmedArguments: String? = null): String
+    suspend fun snapshotV2(): AgentV2Snapshot
+    suspend fun readEventsV2(consumerId: String, afterSeq: Long): AgentV2Batch
+    suspend fun ackEventsV2(consumerId: String, batchId: String, lastSeq: Long): Boolean
+    suspend fun detachV2(consumerId: String)
+    suspend fun startRunV2(text: String): String
+    suspend fun processInput(text: String)
+    suspend fun submitToolResultV2(toolCallId: String, result: ToolResult): Boolean
+    suspend fun submitToolResult(toolCallId: String, result: ToolResult)
+    suspend fun cancelRun()
 }
+
+/** Retains the host-facing constructor and API in public and private builds. */
+class DeadlinerCore(
+    config: AIConfig,
+    orchestrator: AgentOrchestrator,
+    toolExecutor: ToolExecutor,
+    executePersistedTool: ((String, String, String) -> String)? = null,
+    preparePersistedTool: ((String, ToolCall) -> Unit)? = null,
+    readPersistedReceipt: ((String) -> AgentActionReceipt?)? = null,
+) : LifiRuntime by createLifiRuntime(
+    config, orchestrator, toolExecutor, executePersistedTool, preparePersistedTool, readPersistedReceipt,
+)

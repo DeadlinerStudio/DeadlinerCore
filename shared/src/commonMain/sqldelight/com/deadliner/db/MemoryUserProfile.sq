@@ -1,0 +1,12 @@
+selectProfile:
+SELECT content FROM memory_user_profile WHERE singleton_id = 1;
+
+selectProfileWithUpdatedAt:
+SELECT content, updated_at FROM memory_user_profile WHERE singleton_id = 1;
+
+upsertProfile:
+INSERT OR REPLACE INTO memory_user_profile (singleton_id, content, updated_at)
+VALUES (1, ?, ?);
+
+deleteProfile:
+DELETE FROM memory_user_profile WHERE singleton_id = 1;

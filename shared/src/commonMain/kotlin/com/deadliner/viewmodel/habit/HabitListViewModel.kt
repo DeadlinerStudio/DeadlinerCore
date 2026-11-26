@@ -2,11 +2,16 @@ package com.deadliner.viewmodel.habit
 
 import com.deadliner.db.repository.HabitRepository
 import com.deadliner.domain.habit.Habit
-import com.deadliner.domain.habit.HabitPeriod
+import com.deadliner.domain.habit.HabitGoalWindow
+import com.deadliner.domain.habit.HabitGoal
+import com.deadliner.domain.habit.HabitProgressEngine
 import com.deadliner.domain.habit.HabitRecord
-import com.deadliner.domain.habit.HabitRecordStatus
+import com.deadliner.domain.habit.HabitSchedule
+import com.deadliner.domain.habit.HabitScheduleKind
 import com.deadliner.domain.habit.HabitStatus
 import com.deadliner.domain.habit.HabitStatusAction
+import com.deadliner.domain.habit.HabitTracking
+import com.deadliner.domain.habit.HabitWeekdays
 import com.deadliner.platform.PlatformIdentity
 import com.deadliner.service.NotificationOrchestrator
 import kotlinx.coroutines.CoroutineScope
@@ -18,7 +23,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
+import kotlinx.datetime.DatePeriod
+import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
+import kotlinx.datetime.minus
+import kotlinx.datetime.plus
 import kotlinx.datetime.toLocalDateTime
 
 /**
@@ -44,16 +53,9 @@ class HabitListViewModel(
             _uiState.update { it.copy(isLoading = true) }
             try {
                 val habits = habitRepository.list()
+                val records = habitRepository.allRecords()
                 val today = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date.toString()
-                val completedToday = calculateCompletedToday(habits, today)
-                _uiState.update {
-                    it.copy(
-                        habits = habits,
-                        completedToday = completedToday,
-                        isLoading = false,
-                        error = null,
-                    )
-                }
+                _uiState.value = buildState(habits, records, today, _uiState.value.searchQuery)
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -70,12 +72,8 @@ class HabitListViewModel(
         val habits = habitRepository.list()
         val records = habitRepository.allRecords()
         val today = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date.toString()
-        HabitListUiState(
-            habits = habits,
-            records = records,
-            completedToday = calculateCompletedToday(habits, records, today),
-            isLoading = false,
-        ).also { _uiState.value = it }
+        val selectedDate = _uiState.value.selectedDate.ifBlank { today }
+        buildState(habits, records, selectedDate, _uiState.value.searchQuery).also { _uiState.value = it }
     } catch (error: Exception) {
         HabitListUiState(isLoading = false, error = error.message).also { _uiState.value = it }
     }
@@ -103,7 +101,9 @@ class HabitListViewModel(
     }
 
     fun toggleHabitRecordNow(uid: String, occurredOn: String, occurredAt: String): HabitListUiState = try {
-        habitRepository.toggleRecord(uid, occurredOn, occurredAt)
+        applyPrimaryRecordAction(uid, occurredOn, occurredAt)?.let { habit ->
+            notificationOrchestrator?.onHabitRecordsChanged(habit, habitRepository.records(uid))
+        }
         loadNow()
     } catch (error: Exception) {
         _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
@@ -111,13 +111,27 @@ class HabitListViewModel(
 
     fun saveHabitRecordNow(record: HabitRecord): HabitListUiState = try {
         habitRepository.saveRecord(record)
+        habitRepository.find(record.habitUid)?.let { habit ->
+            notificationOrchestrator?.onHabitRecordsChanged(habit, habitRepository.records(record.habitUid))
+        }
+        loadNow()
+    } catch (error: Exception) {
+        _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
+    }
+
+    fun addHabitRecordNow(uid: String, occurredOn: String, amount: Int, occurredAt: String): HabitListUiState = try {
+        habitRepository.addRecordAmount(uid, occurredOn, amount, occurredAt).habit?.let { habit ->
+            notificationOrchestrator?.onHabitRecordsChanged(habit, habitRepository.records(uid))
+        }
         loadNow()
     } catch (error: Exception) {
         _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
     }
 
     fun clearHabitRecordsNow(uid: String, occurredOn: String, occurredAt: String): HabitListUiState = try {
-        habitRepository.clearRecords(uid, occurredOn, occurredAt)
+        habitRepository.clearRecords(uid, occurredOn, occurredAt).habit?.let { habit ->
+            notificationOrchestrator?.onHabitRecordsChanged(habit, habitRepository.records(uid))
+        }
         loadNow()
     } catch (error: Exception) {
         _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
@@ -129,6 +143,45 @@ class HabitListViewModel(
         loadNow()
     } catch (error: Exception) {
         _uiState.value.copy(isLoading = false, error = error.message).also { _uiState.value = it }
+    }
+
+    /** Changes the calendar focus without moving date aggregation back into platform UI. */
+    fun selectDate(date: String) {
+        val parsed = runCatching { LocalDate.parse(date) }.getOrElse {
+            _uiState.update { it.copy(error = "Invalid habit date: $date") }
+            return
+        }
+        _uiState.value = buildState(
+            _uiState.value.habits,
+            _uiState.value.records,
+            parsed.toString(),
+            _uiState.value.searchQuery,
+        )
+    }
+
+    fun updateSearchQuery(query: String) {
+        _uiState.value = buildState(
+            _uiState.value.habits,
+            _uiState.value.records,
+            _uiState.value.selectedDate,
+            query,
+        )
+    }
+
+    fun toggleHabitOnSelectedDate(uid: String) {
+        scope.launch {
+            try {
+                val selectedDate = _uiState.value.selectedDate
+                val status = _uiState.value.visibleHabits.firstOrNull { it.habit.uid == uid }
+                if (status?.scheduleState?.isDue == false) return@launch
+                applyPrimaryRecordAction(uid, selectedDate, Clock.System.now().toString())?.let { habit ->
+                    notificationOrchestrator?.onHabitRecordsChanged(habit, habitRepository.records(uid))
+                }
+                loadNow()
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = e.message) }
+            }
+        }
     }
 
     // ===== 写操作（同步更新内存缓存）=====
@@ -143,10 +196,9 @@ class HabitListViewModel(
                     color = config.color,
                     iconKey = config.iconKey,
                     categoryUid = config.categoryUid,
-                    period = config.period,
-                    timesPerPeriod = config.timesPerPeriod,
-                    goalType = config.goalType,
-                    totalTarget = config.totalTarget,
+                    schedule = config.schedule,
+                    goal = config.goal,
+                    tracking = config.tracking,
                     status = HabitStatus.ACTIVE,
                     sortOrder = config.sortOrder,
                     reminder = config.reminder,
@@ -175,8 +227,8 @@ class HabitListViewModel(
             try {
                 val today = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date.toString()
                 val now = Clock.System.now().toString()
-                val result = habitRepository.toggleRecord(uid, today, now)
-                result.habit?.let { habit ->
+                applyPrimaryRecordAction(uid, today, now)?.let { habit ->
+                    notificationOrchestrator?.onHabitRecordsChanged(habit, habitRepository.records(uid))
                     // 更新内存缓存中的习惯
                     _uiState.update { state ->
                         state.copy(
@@ -185,7 +237,11 @@ class HabitListViewModel(
                         )
                     }
                     // 重新计算今日完成状态
-                    val completedToday = calculateCompletedToday(_uiState.value.habits, today)
+                    val completedToday = HabitProgressEngine.dayOverview(
+                        _uiState.value.habits,
+                        habitRepository.allRecords(),
+                        LocalDate.parse(today),
+                    ).completedByHabitUid
                     _uiState.update { it.copy(completedToday = completedToday) }
                 }
             } catch (e: Exception) {
@@ -210,7 +266,11 @@ class HabitListViewModel(
                 }
                 // 重新计算今日完成状态
                 val today = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date.toString()
-                val completedToday = calculateCompletedToday(_uiState.value.habits, today)
+                val completedToday = HabitProgressEngine.dayOverview(
+                    _uiState.value.habits,
+                    habitRepository.allRecords(),
+                    LocalDate.parse(today),
+                ).completedByHabitUid
                 _uiState.update { it.copy(completedToday = completedToday) }
             } catch (e: Exception) {
                 _uiState.update {
@@ -222,34 +282,54 @@ class HabitListViewModel(
 
     // ===== 辅助方法 =====
 
-    private fun calculateCompletedToday(habits: List<Habit>, today: String): Map<String, Boolean> {
-        return habits.associate { habit ->
-            val records = habitRepository.records(habit.uid)
-            val todayRecords = records.filter {
-                it.occurredOn == today && it.status == HabitRecordStatus.COMPLETED
-            }
-            val isCompleted = when (habit.period) {
-                HabitPeriod.ONCE, HabitPeriod.EBBINGHAUS -> todayRecords.isNotEmpty()
-                HabitPeriod.DAILY, HabitPeriod.WEEKLY, HabitPeriod.MONTHLY -> todayRecords.sumOf { it.count } >= habit.timesPerPeriod
-            }
-            habit.uid to isCompleted
-        }
+    private fun applyPrimaryRecordAction(uid: String, occurredOn: String, occurredAt: String): Habit? {
+        return habitRepository.applyPrimaryRecordAction(uid, occurredOn, occurredAt).habit
     }
 
-    private fun calculateCompletedToday(habits: List<Habit>, records: List<HabitRecord>, today: String): Map<String, Boolean> {
-        return habits.associate { habit ->
-            val todayRecords = records.filter {
-                it.habitUid == habit.uid &&
-                    it.occurredOn == today && it.status == HabitRecordStatus.COMPLETED
-            }
-            val isCompleted = when (habit.period) {
-                HabitPeriod.ONCE, HabitPeriod.EBBINGHAUS -> todayRecords.isNotEmpty()
-                HabitPeriod.DAILY -> todayRecords.sumOf { it.count } >= habit.timesPerPeriod.coerceAtLeast(1)
-                HabitPeriod.WEEKLY, HabitPeriod.MONTHLY -> todayRecords.isNotEmpty()
-            }
-            habit.uid to isCompleted
+    private fun buildState(
+        habits: List<Habit>,
+        records: List<HabitRecord>,
+        selectedDate: String,
+        query: String,
+    ): HabitListUiState {
+        val active = habits.filter { it.status == HabitStatus.ACTIVE }
+        val statuses = HabitPresentationEngine.statuses(active, records, selectedDate)
+            .filter { query.isBlank() || it.habit.name.contains(query, ignoreCase = true) }
+        val selected = LocalDate.parse(selectedDate)
+        val weekStart = selected.minus(DatePeriod(days = selected.dayOfWeek.ordinal))
+        val week = (0..6).map { offset ->
+            val date = weekStart.plus(DatePeriod(days = offset))
+            val overview = HabitProgressEngine.dayOverview(active, records, date)
+            HabitDayOverview(
+                date = date.toString(),
+                completedCount = overview.completedHabitCount,
+                totalCount = overview.dueHabitCount,
+            )
         }
+        val today = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).date.toString()
+        val todayOverview = HabitProgressEngine.dayOverview(habits, records, LocalDate.parse(today))
+        val dailyHabits = statuses.filter {
+            it.habit.goal.window == HabitGoalWindow.SCHEDULED_DAY && it.scheduleState?.isDue == true
+        }
+        val periodGoals = statuses.filter { it.habit.goal.window != HabitGoalWindow.SCHEDULED_DAY }
+        val upcomingReviews = statuses.filter {
+            it.habit.schedule.kind == HabitScheduleKind.ALGORITHM && it.scheduleState?.isDue == false
+        }
+        return HabitListUiState(
+            habits = habits,
+            records = records,
+            completedToday = todayOverview.completedByHabitUid,
+            selectedDate = selectedDate,
+            visibleHabits = dailyHabits + periodGoals,
+            dailyHabits = dailyHabits,
+            periodGoals = periodGoals,
+            upcomingReviews = upcomingReviews,
+            weekOverview = week,
+            searchQuery = query,
+            isLoading = false,
+        )
     }
+
 }
 
 // ===== UiState 定义（使用数据类，易于扩展）=====
@@ -257,10 +337,26 @@ data class HabitListUiState(
     val habits: List<Habit> = emptyList(),
     val records: List<HabitRecord> = emptyList(),
     val completedToday: Map<String, Boolean> = emptyMap(),
+    val selectedDate: String = "",
+    val visibleHabits: List<HabitDayStatus> = emptyList(),
+    val dailyHabits: List<HabitDayStatus> = emptyList(),
+    val periodGoals: List<HabitDayStatus> = emptyList(),
+    val upcomingReviews: List<HabitDayStatus> = emptyList(),
+    val weekOverview: List<HabitDayOverview> = emptyList(),
+    val searchQuery: String = "",
     val isLoading: Boolean = true,
     val error: String? = null,
     val filter: HabitFilter = HabitFilter.ALL,
 )
+
+data class HabitDayOverview(
+    val date: String,
+    val completedCount: Int,
+    val totalCount: Int,
+) {
+    val completionRatio: Float
+        get() = if (totalCount == 0) 0f else completedCount.toFloat() / totalCount
+}
 
 // ===== 配置对象（易于扩展新参数）=====
 data class HabitCreateConfig(
@@ -269,10 +365,13 @@ data class HabitCreateConfig(
     val color: Int? = null,
     val iconKey: String? = null,
     val categoryUid: String? = null,
-    val period: HabitPeriod = HabitPeriod.DAILY,
-    val timesPerPeriod: Int = 1,
-    val goalType: com.deadliner.domain.habit.HabitGoalType = com.deadliner.domain.habit.HabitGoalType.PER_PERIOD,
-    val totalTarget: Int? = null,
+    val schedule: HabitSchedule = HabitSchedule(
+        HabitScheduleKind.WEEKLY_DAYS,
+        "1970-01-01",
+        weekdaysMask = HabitWeekdays.ALL,
+    ),
+    val goal: HabitGoal = HabitGoal(),
+    val tracking: HabitTracking = HabitTracking(),
     val sortOrder: Int = 0,
     val reminder: com.deadliner.domain.habit.HabitReminder? = null,
     // 未来可轻松添加新字段

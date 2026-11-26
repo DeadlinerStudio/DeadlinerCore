@@ -1,10 +1,19 @@
 package com.deadliner.db
 
 import com.deadliner.domain.category.Category
+import com.deadliner.domain.category.CategoryPresets
 import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.capture.CaptureSource
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitPeriod
+import com.deadliner.domain.habit.HabitActionOutcome
+import com.deadliner.domain.habit.HabitGoal
+import com.deadliner.domain.habit.HabitGoalWindow
+import com.deadliner.domain.habit.HabitSchedule
+import com.deadliner.domain.habit.HabitScheduleKind
+import com.deadliner.domain.habit.HabitTracking
+import com.deadliner.domain.habit.HabitTrackingMode
+import com.deadliner.domain.habit.HabitWeekdays
 import com.deadliner.domain.habit.HabitRecord
 import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.domain.account.UserProfile
@@ -15,15 +24,23 @@ import com.deadliner.domain.task.TaskActionOutcome
 import com.deadliner.domain.task.TaskSubtask
 import com.deadliner.model.ChangeOperation
 import com.deadliner.sync.ChangeLogSyncPayload
+import com.deadliner.sync.SyncResourceKind
 import com.deadliner.sync.snapshot.SnapshotV3EntityVersion
 import com.deadliner.sync.snapshot.SnapshotV3CategoryItem
 import com.deadliner.sync.snapshot.SnapshotV3Root
 import com.deadliner.sync.snapshot.SnapshotV3TaskItem
 import com.deadliner.sync.snapshot.SnapshotV3Version
+import com.deadliner.sync.transport.SyncBlob
+import com.deadliner.sync.transport.SyncBlobTransport
+import com.deadliner.sync.transport.SyncWriteCondition
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -32,6 +49,203 @@ import platform.Foundation.NSTemporaryDirectory
 import platform.posix.remove
 
 class DatabaseIntegrationTest {
+    @Test
+    fun habitV5PersistsWeeklyScheduleAndRejectsOffDayRecording() {
+        val path = "${NSTemporaryDirectory()}deadliner-habit-v5-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "habit-v5-test"))
+        try {
+            val habit = Habit(
+                uid = "habit.workdays",
+                name = "背单词",
+                schedule = HabitSchedule(
+                    HabitScheduleKind.WEEKLY_DAYS,
+                    "2026-08-17",
+                    weekdaysMask = HabitWeekdays.WEEKDAYS,
+                ),
+                goal = HabitGoal(HabitGoalWindow.SCHEDULED_DAY, 20),
+                tracking = HabitTracking(HabitTrackingMode.QUANTITY, "words", 5),
+                createdAt = NOW,
+                updatedAt = NOW,
+            )
+            database.habits.create(habit)
+
+            assertEquals(habit, database.habits.find(habit.uid))
+            assertEquals(
+                HabitActionOutcome.NOT_DUE,
+                database.habits.addRecordAmount(habit.uid, "2026-08-22", 5, NOW).outcome,
+            )
+            assertEquals(
+                HabitActionOutcome.APPLIED,
+                database.habits.addRecordAmount(habit.uid, "2026-08-18", 5, NOW).outcome,
+            )
+            assertEquals(5, database.habits.records(habit.uid).single().count)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun memoryUserProfileSyncDoesNotOverwriteSettingsUser() {
+        val sourcePath = "${NSTemporaryDirectory()}deadliner-memory-profile-source-${NSUUID().UUIDString}.db"
+        val targetPath = "${NSTemporaryDirectory()}deadliner-memory-profile-target-${NSUUID().UUIDString}.db"
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath, "android-test-device"))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath, "ios-test-device"))
+        try {
+            source.memory.updateUserProfile("Prefers concise weekly plans")
+            target.profiles.create(
+                UserProfile(
+                    uid = "settings-user",
+                    nickname = "Aritx",
+                    createdAt = NOW,
+                    updatedAt = NOW,
+                ),
+            )
+
+            val result = target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+
+            assertEquals("Prefers concise weekly plans", target.memory.getUserProfile())
+            assertEquals("Aritx", target.profiles.find("settings-user")?.nickname)
+            assertTrue(SyncResourceKind.MEMORY in result.appliedResources)
+        } finally {
+            source.close()
+            target.close()
+            remove(sourcePath)
+            remove(targetPath)
+        }
+    }
+
+    @Test
+    fun captureSnapshotAppliesAcrossDevicesAndReportsCaptureResource() {
+        val sourcePath = "${NSTemporaryDirectory()}deadliner-capture-sync-source-${NSUUID().UUIDString}.db"
+        val targetPath = "${NSTemporaryDirectory()}deadliner-capture-sync-target-${NSUUID().UUIDString}.db"
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath, "ohos-test-device"))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath, "ios-test-device"))
+        try {
+            val capture = CaptureItem(
+                uid = "capture.cross-device",
+                text = "修脚下周二去复查",
+                source = CaptureSource.MANUAL,
+                createdAt = "2026-08-11T04:15:25Z",
+                updatedAt = "2026-08-11T04:15:25Z",
+            )
+            source.captures.create(capture)
+
+            val result = target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+
+            assertEquals(capture, target.captures.find(capture.uid))
+            assertTrue(SyncResourceKind.CAPTURE in result.appliedResources)
+        } finally {
+            source.close()
+            target.close()
+            remove(sourcePath)
+            remove(targetPath)
+        }
+    }
+
+    @Test
+    fun habitCheckInAndCancellationAdvanceAggregateVersionAcrossDevices() {
+        val sourcePath = "${NSTemporaryDirectory()}deadliner-habit-sync-source-${NSUUID().UUIDString}.db"
+        val targetPath = "${NSTemporaryDirectory()}deadliner-habit-sync-target-${NSUUID().UUIDString}.db"
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath, "ohos-test-device"))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath, "ios-test-device"))
+        try {
+            val habit = Habit(
+                uid = "habit.cross-device",
+                name = "GRE 背单词",
+                period = HabitPeriod.DAILY,
+                createdAt = "2026-08-12T04:52:36Z",
+                updatedAt = "2026-08-12T04:52:36Z",
+            )
+            source.habits.create(habit)
+            target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+            assertTrue(target.habits.records(habit.uid).isEmpty())
+
+            source.habits.saveRecord(
+                HabitRecord(
+                    uid = "record.ohos",
+                    habitUid = habit.uid,
+                    occurredOn = "2026-08-12",
+                    createdAt = "2026-08-12T13:00:24Z",
+                    updatedAt = "2026-08-12T13:00:24Z",
+                ),
+                ChangeOperation.INSERT,
+            )
+            val checkedInPayload = source.sync.mergeRemotePayload(null).payload
+            val checkedInSnapshot = requireNotNull(Json.decodeFromString<ChangeLogSyncPayload>(checkedInPayload).snapshot)
+            assertEquals(
+                "2026-08-12T13:00:24Z",
+                checkedInSnapshot.habits.single { it.uid == habit.uid }.ver.ts,
+            )
+
+            target.sync.mergeRemotePayload(checkedInPayload)
+            assertEquals(listOf("record.ohos"), target.habits.records(habit.uid).map { it.uid })
+
+            source.habits.clearRecords(habit.uid, "2026-08-12", "2026-08-12T14:00:00Z")
+            val cancelledPayload = source.sync.mergeRemotePayload(null).payload
+            val cancelledSnapshot = requireNotNull(Json.decodeFromString<ChangeLogSyncPayload>(cancelledPayload).snapshot)
+            val cancelledHabit = cancelledSnapshot.habits.single { it.uid == habit.uid }
+            assertEquals("2026-08-12T14:00:00Z", cancelledHabit.ver.ts)
+            assertTrue(cancelledHabit.doc?.records?.isEmpty() == true)
+
+            target.sync.mergeRemotePayload(cancelledPayload)
+            assertTrue(target.habits.records(habit.uid).isEmpty())
+        } finally {
+            source.close()
+            target.close()
+            remove(sourcePath)
+            remove(targetPath)
+        }
+    }
+
+    @Test
+    fun categoryPresetsSeedOnceAndRestoreWithoutOverwritingLiveEdits() {
+        val path = "${NSTemporaryDirectory()}deadliner-category-presets-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            assertEquals(CategoryPresets.all.map { it.uid }, database.categories.list().map { it.uid })
+
+            val edited = requireNotNull(database.categories.find("preset.work")).copy(
+                name = "我的工作",
+                updatedAt = NOW,
+            )
+            database.categories.update(edited)
+            database.categories.softDelete("preset.study", NOW)
+
+            val restored = database.categories.restorePresets()
+
+            assertEquals("我的工作", database.categories.find("preset.work")?.name)
+            val restoredStudy = requireNotNull(database.categories.find("preset.study"))
+            assertFalse(restoredStudy.isDeleted)
+            assertEquals(CategoryPresets.all.first { it.uid == "preset.study" }.name, restoredStudy.name)
+            assertEquals(8, restored.size)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun deletingAllCategoriesDoesNotSeedPresetsAgainOnReopen() {
+        val path = "${NSTemporaryDirectory()}deadliner-category-presets-reopen-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            database.categories.list().forEach { category ->
+                database.categories.softDelete(category.uid, NOW)
+            }
+        } finally {
+            database.close()
+        }
+
+        val reopened = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
+        try {
+            assertTrue(reopened.categories.list().isEmpty())
+        } finally {
+            reopened.close()
+            remove(path)
+        }
+    }
+
     @Test
     fun snapshotRestoresTaskWhenIncrementalLogDoesNotContainIt() {
         val path = "${NSTemporaryDirectory()}deadliner-snapshot-${NSUUID().UUIDString}.db"
@@ -58,14 +272,191 @@ class DatabaseIntegrationTest {
     }
 
     @Test
-    fun legacyChangeOnlyPayloadRemainsReadable() {
+    fun taskSubtaskChangesAdvanceAggregateVersionAndRemoveMissingRemoteChildren() {
+        val sourcePath = "${NSTemporaryDirectory()}deadliner-task-aggregate-source-${NSUUID().UUIDString}.db"
+        val targetPath = "${NSTemporaryDirectory()}deadliner-task-aggregate-target-${NSUUID().UUIDString}.db"
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath, "source-device"))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath, "target-device"))
+        try {
+            val removedAt = "2026-08-30T11:00:00Z"
+            val first = TaskSubtask("subtask.first", "task.aggregate", "Keep", createdAt = NOW, updatedAt = NOW)
+            val second = TaskSubtask("subtask.second", "task.aggregate", "Remove", createdAt = NOW, updatedAt = NOW)
+            val task = Task(
+                uid = "task.aggregate",
+                title = "Aggregate task",
+                createdAt = NOW,
+                updatedAt = NOW,
+                subtasks = listOf(first, second),
+            )
+            source.tasks.create(task)
+            target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+
+            source.tasks.update(
+                task.copy(
+                    subtasks = listOf(first, second.copy(updatedAt = removedAt, isDeleted = true)),
+                ),
+            )
+            val updatedPayload = source.sync.mergeRemotePayload(null).payload
+            val updatedSnapshot = requireNotNull(Json.decodeFromString<ChangeLogSyncPayload>(updatedPayload).snapshot)
+            assertEquals(removedAt, updatedSnapshot.tasks.single { it.uid == task.uid }.ver.ts)
+
+            val result = target.sync.mergeRemotePayload(updatedPayload)
+
+            assertEquals(1, result.remoteApplied)
+            assertEquals(listOf(first.uid), target.tasks.find(task.uid)?.subtasks?.map(TaskSubtask::uid))
+        } finally {
+            source.close()
+            target.close()
+            remove(sourcePath)
+            remove(targetPath)
+        }
+    }
+
+    @Test
+    fun legacyChangeOnlyPayloadIsRejectedByV4ProtocolGate() {
         val path = "${NSTemporaryDirectory()}deadliner-legacy-payload-${NSUUID().UUIDString}.db"
         val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
         try {
             val result = database.sync.mergeRemotePayload("""{"formatVersion":1,"changes":[]}""")
 
             assertEquals(0, result.remoteApplied)
-            assertTrue(Json.decodeFromString<ChangeLogSyncPayload>(result.payload).snapshot != null)
+            assertTrue(result.payload.isEmpty())
+            assertTrue(result.failureMessage?.contains("Unsupported sync format 1") == true)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun legacyV3EnvelopeWithoutSnapshotIsUpgradedSafely() {
+        val path = "${NSTemporaryDirectory()}deadliner-v3-empty-snapshot-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "android-test-device"))
+        try {
+            val result = database.sync.mergeRemotePayload("""{"formatVersion":3,"changes":[]}""")
+
+            assertNull(result.failureMessage)
+            val emitted = Json.decodeFromString<ChangeLogSyncPayload>(result.payload)
+            assertEquals(ChangeLogSyncPayload.FORMAT_VERSION, emitted.formatVersion)
+            assertNotNull(emitted.snapshot)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun legacyV3HabitSnapshotMigratesBeforeMerge() {
+        val path = "${NSTemporaryDirectory()}deadliner-legacy-v3-habit-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "android-test-device"))
+        try {
+            val payload = """
+                {
+                  "snapshot": {
+                    "version": {"ts":"2026-08-28T06:00:00Z","dev":"legacy-device"},
+                    "habits": [{
+                      "uid": "habit.legacy.ebbinghaus",
+                      "ver": {"ts":"2026-08-28T06:00:00Z","ctr":2,"dev":"legacy-device"},
+                      "deleted": false,
+                      "doc": {
+                        "habit": {
+                          "uid": "habit.legacy.ebbinghaus",
+                          "name": "Legacy review",
+                          "period": "EBBINGHAUS",
+                          "timesPerPeriod": 9,
+                          "goalType": "PER_PERIOD",
+                          "status": "ACTIVE",
+                          "createdAt": "2026-08-20T09:30:00Z",
+                          "updatedAt": "2026-08-28T06:00:00Z"
+                        },
+                        "records": [],
+                        "schedule_items": []
+                      }
+                    }]
+                  }
+                }
+            """.trimIndent()
+
+            val result = database.sync.mergeRemotePayload(payload)
+
+            assertNull(result.failureMessage)
+            assertEquals(1, result.remoteApplied)
+            val migrated = assertNotNull(database.habits.find("habit.legacy.ebbinghaus"))
+            assertEquals(HabitScheduleKind.ALGORITHM, migrated.schedule.kind)
+            assertEquals("2026-08-20", migrated.schedule.startOn)
+            assertEquals(1, migrated.goal.targetCount)
+            assertEquals(HabitTrackingMode.CHECK_OFF, migrated.tracking.mode)
+            val emitted = Json.decodeFromString<ChangeLogSyncPayload>(result.payload)
+            assertEquals(ChangeLogSyncPayload.FORMAT_VERSION, emitted.formatVersion)
+            assertEquals(SnapshotV3Root.FORMAT_VERSION, emitted.snapshot?.formatVersion)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun versionlessCurrentSnapshotPreservesOhosHabitRecordDefaults() {
+        val path = "${NSTemporaryDirectory()}deadliner-versionless-v4-habit-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "android-test-device"))
+        try {
+            val payload = """
+                {
+                  "snapshot": {
+                    "version": {"ts":"2026-08-30T02:08:14.730Z","dev":"ohos-device"},
+                    "habits": [{
+                      "uid": "habit.current",
+                      "ver": {"ts":"2026-08-30T02:08:14.730Z","ctr":0,"dev":"ohos-device"},
+                      "deleted": false,
+                      "doc": {
+                        "habit": {
+                          "uid": "habit.current",
+                          "name": "Current habit",
+                          "schedule": {"kind":"WEEKLY_DAYS","startOn":"2026-08-01","weekdaysMask":127},
+                          "goal": {"window":"SCHEDULED_DAY","targetCount":1},
+                          "status": "ACTIVE",
+                          "createdAt": "2026-08-01T00:00:00Z"
+                        },
+                        "records": [{
+                          "uid": "ohos-record",
+                          "habitUid": "habit.current",
+                          "occurredOn": "2026-08-30",
+                          "createdAt": "2026-08-30T02:08:14.730Z"
+                        }]
+                      }
+                    }]
+                  }
+                }
+            """.trimIndent()
+
+            val result = database.sync.mergeRemotePayload(payload)
+
+            assertNull(result.failureMessage)
+            val record = database.habits.records("habit.current").single()
+            assertEquals("ohos-record", record.uid)
+            assertEquals(1, record.count)
+            assertEquals("2026-08-30T02:08:14.730Z", record.updatedAt)
+            assertFalse(record.isDeleted)
+        } finally {
+            database.close()
+            remove(path)
+        }
+    }
+
+    @Test
+    fun safeWebDavSyncDoesNotConvertCancellationIntoFailure() {
+        val path = "${NSTemporaryDirectory()}deadliner-sync-cancellation-${NSUUID().UUIDString}.db"
+        val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "android-test-device"))
+        try {
+            val cancelledTransport = object : SyncBlobTransport {
+                override suspend fun read(path: String): SyncBlob? = throw CancellationException("superseded")
+                override suspend fun write(path: String, bytes: ByteArray, condition: SyncWriteCondition) = Unit
+                override suspend fun ensureCollection(path: String): Boolean = true
+            }
+
+            assertFailsWith<CancellationException> {
+                runBlocking { database.webDavChangeLogSync.synchronizeSafely(cancelledTransport) }
+            }
         } finally {
             database.close()
             remove(path)
@@ -77,9 +468,9 @@ class DatabaseIntegrationTest {
         val path = "${NSTemporaryDirectory()}deadliner-category-snapshot-${NSUUID().UUIDString}.db"
         val database = DeadlinerDatabase.create(MacosDatabaseDriverFactory(path, "mac-test-device"))
         try {
-            val preset = Category("category.inbox", "收件箱", "tray", "#2563EB", true, 0, NOW, NOW)
+            val preset = Category("category.inbox", "收件箱", "inbox_tray", "#2563EB", true, 0, NOW, NOW)
             val payload = ChangeLogSyncPayload(
-                formatVersion = 2,
+                formatVersion = ChangeLogSyncPayload.FORMAT_VERSION,
                 snapshot = SnapshotV3Root(
                     version = SnapshotV3Version(NOW, "ios"),
                     categories = listOf(SnapshotV3CategoryItem(preset.uid, SnapshotV3EntityVersion(NOW, 1, "ios"), false, preset)),
@@ -202,6 +593,77 @@ class DatabaseIntegrationTest {
         } finally {
             database.close()
             remove(path)
+        }
+    }
+
+    @Test
+    fun placeholderCategoryFromIncompleteSnapshotNeverOverwritesRealCategory() {
+        val sourcePath = "${NSTemporaryDirectory()}deadliner-placeholder-source-${NSUUID().UUIDString}.db"
+        val targetPath = "${NSTemporaryDirectory()}deadliner-placeholder-target-${NSUUID().UUIDString}.db"
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath, "source-device"))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath, "target-device"))
+        try {
+            val category = Category("category.real", "Real", "flag", "#EF4444", false, 10, NOW, NOW)
+            source.categories.create(category)
+            val habit = Habit("habit.placeholder", "Uses real category", categoryUid = category.uid,
+                period = HabitPeriod.DAILY, createdAt = "2026-07-18T00:05:00Z", updatedAt = "2026-07-18T00:05:00Z")
+            source.habits.create(habit)
+
+            // A torn export: the habit is present but its category is not.
+            val payload = Json.decodeFromString<ChangeLogSyncPayload>(source.sync.mergeRemotePayload(null).payload)
+            val snapshot = requireNotNull(payload.snapshot)
+            val torn = payload.copy(snapshot = snapshot.copy(categories = snapshot.categories.filterNot { it.uid == category.uid }))
+            target.sync.mergeRemotePayload(Json.encodeToString(torn))
+            assertEquals("未命名分类", target.categories.find(category.uid)?.name)
+
+            // The placeholder travels back but must not outrank the real category.
+            source.sync.mergeRemotePayload(target.sync.mergeRemotePayload(null).payload)
+            assertEquals("Real", source.categories.find(category.uid)?.name)
+
+            // A complete snapshot repairs the placeholder on the other device.
+            target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+            assertEquals("Real", target.categories.find(category.uid)?.name)
+        } finally {
+            source.close()
+            target.close()
+            remove(sourcePath)
+            remove(targetPath)
+        }
+    }
+
+    @Test
+    fun placeholderCannotOverwriteEpochPresetEvenWithHigherDeviceId() {
+        val sourcePath = "${NSTemporaryDirectory()}preset-source-${NSUUID().UUIDString}.db"
+        val targetPath = "${NSTemporaryDirectory()}preset-target-${NSUUID().UUIDString}.db"
+        val source = DeadlinerDatabase.create(MacosDatabaseDriverFactory(sourcePath))
+        val target = DeadlinerDatabase.create(MacosDatabaseDriverFactory(targetPath))
+        try {
+            val preset = CategoryPresets.all.first()
+            source.habits.create(Habit("habit.preset", "Preset reference", categoryUid = preset.uid,
+                period = HabitPeriod.DAILY, createdAt = NOW, updatedAt = NOW))
+            val payload = Json.decodeFromString<ChangeLogSyncPayload>(source.sync.mergeRemotePayload(null).payload)
+            val snapshot = requireNotNull(payload.snapshot)
+            // Model an existing receiver without presets (for example after restoring an older backup).
+            target.database.categoryQueries.deleteAll()
+            target.sync.mergeRemotePayload(Json.encodeToString(payload.copy(snapshot = snapshot.copy(
+                categories = snapshot.categories.filterNot { it.uid == preset.uid }))))
+            assertEquals("未命名分类", target.categories.find(preset.uid)?.name)
+            val exported = Json.decodeFromString<ChangeLogSyncPayload>(target.sync.mergeRemotePayload(null).payload)
+            val placeholderSnapshot = requireNotNull(exported.snapshot)
+            // Use distinct device IDs explicitly: the native test factory shares process identity.
+            source.database.legacyV2VersionQueries.upsertVersion("v3/category", preset.uid, preset.updatedAt, 0, "a-source")
+            val returned = exported.copy(snapshot = placeholderSnapshot.copy(categories = placeholderSnapshot.categories.map {
+                if (it.uid == preset.uid) it.copy(ver = it.ver.copy(dev = "z-target")) else it
+            }))
+            source.sync.mergeRemotePayload(Json.encodeToString(returned))
+            assertEquals(preset.name, source.categories.find(preset.uid)?.name)
+            assertEquals(preset.iconKey, source.categories.find(preset.uid)?.iconKey)
+            assertEquals(preset.colorHex, source.categories.find(preset.uid)?.colorHex)
+            target.sync.mergeRemotePayload(source.sync.mergeRemotePayload(null).payload)
+            assertEquals(preset.name, target.categories.find(preset.uid)?.name)
+            assertTrue(target.categories.find(preset.uid)?.isPreset == true)
+        } finally {
+            source.close(); target.close(); remove(sourcePath); remove(targetPath)
         }
     }
 

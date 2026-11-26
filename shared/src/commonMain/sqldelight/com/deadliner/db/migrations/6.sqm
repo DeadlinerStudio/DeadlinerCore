@@ -1,0 +1,35 @@
+-- v6 -> v7: Task-only focus sessions and one device-local active timer.
+CREATE TABLE focus_session (
+    uid TEXT NOT NULL PRIMARY KEY,
+    task_uid TEXT NOT NULL,
+    task_title_snapshot TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    planned_duration_seconds INTEGER,
+    started_at TEXT NOT NULL,
+    ended_at TEXT NOT NULL,
+    duration_seconds INTEGER NOT NULL,
+    completion_kind TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    is_deleted INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE active_focus_timer (
+    singleton_id INTEGER NOT NULL PRIMARY KEY CHECK (singleton_id = 1),
+    session_uid TEXT NOT NULL UNIQUE,
+    task_uid TEXT NOT NULL,
+    task_title_snapshot TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    planned_duration_seconds INTEGER,
+    state TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    running_segment_started_at TEXT,
+    accumulated_seconds INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_focus_session_task
+ON focus_session(is_deleted, task_uid, started_at);
+
+CREATE INDEX idx_focus_session_started
+ON focus_session(is_deleted, started_at);

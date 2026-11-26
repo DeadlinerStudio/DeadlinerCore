@@ -7,4 +7,7 @@ data class AIConfig(
     val platform: String,
     val timezone: String,
     val temperature: Double? = null,
+    /** Explicit protocol selection; network failures never switch protocols. */
+    val nativeToolCalling: Boolean = false,
+    val preferredLanguage: String = "zh-CN",
 )

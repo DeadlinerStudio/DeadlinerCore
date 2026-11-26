@@ -1,0 +1,11 @@
+CREATE TABLE ai_session (
+    session_id TEXT NOT NULL PRIMARY KEY,
+    payload TEXT NOT NULL
+);
+
+CREATE TABLE ai_execution_receipt (
+    action_id TEXT NOT NULL PRIMARY KEY,
+    tool_name TEXT NOT NULL,
+    arguments TEXT NOT NULL,
+    payload TEXT NOT NULL
+);

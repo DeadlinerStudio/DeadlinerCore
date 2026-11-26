@@ -3,6 +3,7 @@ package com.deadliner.db.repository
 import com.deadliner.db.AppDatabase
 import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.model.ChangeOperation
+import com.deadliner.sync.RepositoryMutationNotifier
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -11,7 +12,21 @@ class MemoryRepository(
     private val database: AppDatabase,
     private val changeLog: ChangeLogRepository,
     private val json: Json = Json,
-) {
+    private val mutationNotifier: RepositoryMutationNotifier = RepositoryMutationNotifier.NONE,
+) : com.deadliner.domain.ai.agent.AgentSessionStore {
+    fun activeLifiSessionId(): String = readSession("__active_lifi_session__")
+        ?.takeIf { it.isNotBlank() } ?: startNewLifiSession()
+
+    fun startNewLifiSession(): String = com.deadliner.platform.PlatformIdentity.newId().also {
+        saveSession("__active_lifi_session__", it)
+    }
+
+    override fun readSession(sessionId: String): String? =
+        database.aiSessionQueries.selectSession(sessionId).executeAsOneOrNull()
+
+    override fun saveSession(sessionId: String, payload: String) {
+        database.aiSessionQueries.saveSession(sessionId, payload)
+    }
     fun list(): List<MemoryFragment> = database.memoryQueries.selectAll(::toMemory).executeAsList()
 
     fun find(uid: String): MemoryFragment? =
@@ -21,14 +36,26 @@ class MemoryRepository(
 
     fun update(fragment: MemoryFragment) = save(fragment, ChangeOperation.UPDATE)
 
+    fun getUserProfile(): String =
+        database.memoryUserProfileQueries.selectProfile().executeAsOneOrNull().orEmpty()
+
+    fun updateUserProfile(profile: String) {
+        val normalized = profile.trim()
+        database.transaction {
+            database.memoryUserProfileQueries.upsertProfile(normalized, currentTimestamp())
+        }
+        mutationNotifier.notifyMutation()
+    }
+
     fun delete(uid: String, updatedAt: String) {
         database.transaction {
             database.memoryQueries.softDeleteMemory(updatedAt, uid)
             changeLog.appendLocal("memory_fragment", uid, ChangeOperation.DELETE, null)
         }
+        mutationNotifier.notifyMutation()
     }
 
-    fun replaceAll(fragments: List<MemoryFragment>) {
+    fun replaceSnapshot(fragments: List<MemoryFragment>, userProfile: String?) {
         database.transaction {
             val existing = list()
             for (old in existing) {
@@ -45,7 +72,13 @@ class MemoryRepository(
                     fragment.updatedAt, fragment.isDeleted.asLong(), fragment.uid,
                 )
             }
+            if (userProfile == null) {
+                database.memoryUserProfileQueries.deleteProfile()
+            } else {
+                database.memoryUserProfileQueries.upsertProfile(userProfile.trim(), currentTimestamp())
+            }
         }
+        mutationNotifier.notifyMutation()
     }
 
     fun appendConversationTurn(role: String, content: String) {
@@ -90,6 +123,7 @@ class MemoryRepository(
             )
             changeLog.appendLocal("memory_fragment", fragment.uid, operation, json.encodeToJsonElement(fragment).jsonObject)
         }
+        mutationNotifier.notifyMutation()
     }
 
     private fun toMemory(

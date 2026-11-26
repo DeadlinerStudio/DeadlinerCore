@@ -4,6 +4,7 @@ import com.deadliner.db.AppDatabase
 import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.capture.CaptureSource
 import com.deadliner.model.ChangeOperation
+import com.deadliner.sync.RepositoryMutationNotifier
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -12,6 +13,7 @@ class CaptureRepository(
     private val database: AppDatabase,
     private val changeLog: ChangeLogRepository,
     private val json: Json = Json,
+    private val mutationNotifier: RepositoryMutationNotifier = RepositoryMutationNotifier.NONE,
 ) {
     fun list(): List<CaptureItem> = database.captureQueries.selectAll(::toCapture).executeAsList()
 
@@ -29,6 +31,7 @@ class CaptureRepository(
             database.captureQueries.softDeleteCapture(updatedAt, uid)
             changeLog.appendLocal("capture_item", uid, ChangeOperation.DELETE, null)
         }
+        mutationNotifier.notifyMutation()
     }
 
     private fun save(item: CaptureItem, operation: ChangeOperation) {
@@ -42,6 +45,7 @@ class CaptureRepository(
             )
             changeLog.appendLocal("capture_item", item.uid, operation, json.encodeToJsonElement(item).jsonObject)
         }
+        mutationNotifier.notifyMutation()
     }
 
     private fun toCapture(

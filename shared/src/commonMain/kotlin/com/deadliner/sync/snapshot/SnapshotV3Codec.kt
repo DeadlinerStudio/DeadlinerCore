@@ -6,7 +6,7 @@ import kotlinx.serialization.json.Json
 
 class SnapshotV3ValidationException(
     val issues: List<SnapshotV3ValidationIssue>,
-) : IllegalArgumentException(issues.joinToString(prefix = "Invalid v3 snapshot: ") { it.message })
+) : IllegalArgumentException(issues.joinToString(prefix = "Invalid v5 snapshot: ") { it.message })
 
 data class SnapshotV3ValidationIssue(
     val path: String,
@@ -24,7 +24,12 @@ object SnapshotV3Codec {
         return json.encodeToString(snapshot)
     }
 
-    fun decode(raw: String): SnapshotV3Root = json.decodeFromString<SnapshotV3Root>(raw).also {
+    fun decode(raw: String): SnapshotV3Root = json.decodeFromString<SnapshotV3Root>(raw).let {
+        if (it.formatVersion == 5) {
+            require(it.focusSessions.all { item -> item.doc?.boundTarget?.kind != com.deadliner.domain.focus.FocusTargetKind.HABIT }) { "V5 cannot contain Habit focus" }
+            it.copy(formatVersion = SnapshotV3Root.FORMAT_VERSION)
+        } else it
+    }.also {
         SnapshotV3Validator.requireValid(it)
     }
 }
@@ -37,10 +42,11 @@ object SnapshotV3Validator {
 
     fun validate(snapshot: SnapshotV3Root): List<SnapshotV3ValidationIssue> = buildList {
         if (snapshot.formatVersion != SnapshotV3Root.FORMAT_VERSION) {
-            add(SnapshotV3ValidationIssue("format_version", "expected format version 3"))
+            add(SnapshotV3ValidationIssue("format_version", "expected format version ${SnapshotV3Root.FORMAT_VERSION}"))
         }
         validateItems("categories", snapshot.categories, { it.uid }, { it.deleted }, { it.doc }, { it.uid })
         validateItems("tasks", snapshot.tasks, { it.uid }, { it.deleted }, { it.doc }, { it.uid })
+        validateItems("focus_sessions", snapshot.focusSessions, { it.uid }, { it.deleted }, { it.doc }, { it.uid })
         validateItems("habits", snapshot.habits, { it.uid }, { it.deleted }, { it.doc?.habit }, { it.uid })
         validateItems("captures", snapshot.captures, { it.uid }, { it.deleted }, { it.doc }, { it.uid })
         validateItems("memory_fragments", snapshot.memoryFragments, { it.uid }, { it.deleted }, { it.doc }, { it.uid })
@@ -50,6 +56,9 @@ object SnapshotV3Validator {
         }
         snapshot.tasks.forEachIndexed { index, item ->
             if (item.doc?.isDeleted == true) add(SnapshotV3ValidationIssue("tasks[$index]", "live document must not be marked deleted"))
+        }
+        snapshot.focusSessions.forEachIndexed { index, item ->
+            if (item.doc?.isDeleted == true) add(SnapshotV3ValidationIssue("focus_sessions[$index]", "live document must not be marked deleted"))
         }
         snapshot.habits.forEachIndexed { index, item ->
             if (item.doc?.habit?.isDeleted == true) add(SnapshotV3ValidationIssue("habits[$index]", "live document must not be marked deleted"))
@@ -74,10 +83,6 @@ object SnapshotV3Validator {
             item.doc?.records.orEmpty().forEachIndexed { recordIndex, record ->
                 val path = "habits[$index].doc.records[$recordIndex]"
                 if (record.habitUid != item.uid) add(SnapshotV3ValidationIssue(path, "habitUid must equal parent uid"))
-            }
-            item.doc?.scheduleItems.orEmpty().forEachIndexed { scheduleIndex, schedule ->
-                val path = "habits[$index].doc.schedule_items[$scheduleIndex]"
-                if (schedule.habitUid != item.uid) add(SnapshotV3ValidationIssue(path, "habitUid must equal parent uid"))
             }
         }
     }

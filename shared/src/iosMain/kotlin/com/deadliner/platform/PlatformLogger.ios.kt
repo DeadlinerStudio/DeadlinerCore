@@ -22,3 +22,13 @@ actual class PlatformLogger {
         println("[ERROR] $tag: $message ${error?.message.orEmpty()}")
     }
 }
+
+/** iOS captures KMP stdout through AIStdStreamCapture into its AppLog buffer. */
+actual object PlatformLogSink {
+    actual fun configure(directory: String, processId: Long?) = Unit
+
+    actual fun write(level: LogLevel, category: String, message: String, errorMessage: String?) {
+        val errorSuffix = errorMessage?.takeIf { it.isNotBlank() }?.let { ": " + it }.orEmpty()
+        println("[" + level.name + "] " + category + ": " + message + errorSuffix)
+    }
+}

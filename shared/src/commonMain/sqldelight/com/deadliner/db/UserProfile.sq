@@ -19,3 +19,6 @@ UPDATE user_profile SET nickname = ?, avatar_file_name = ?, tier = ?, updated_at
 
 softDeleteUserProfile:
 UPDATE user_profile SET is_deleted = 1, updated_at = ? WHERE uid = ?;
+
+deleteAll:
+DELETE FROM user_profile;

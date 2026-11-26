@@ -3,10 +3,11 @@ package com.deadliner.sync
 import com.deadliner.db.AppDatabase
 import com.deadliner.db.repository.asBoolean
 import com.deadliner.db.repository.asLong
+import com.deadliner.db.repository.habitFromSql
+import com.deadliner.db.repository.upsertHabit
 import com.deadliner.domain.category.Category
 import com.deadliner.domain.habit.Habit
 import com.deadliner.domain.habit.HabitRecord
-import com.deadliner.domain.habit.HabitStatus
 import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskState
 import com.deadliner.domain.task.TaskSubtask
@@ -82,7 +83,7 @@ class LegacyV2SyncFacade(
 
     private fun buildHabitRoot(): LegacyHabitSnapshotV2Root = LegacyHabitSnapshotV2Root(
         version = rootVersion(),
-        items = database.habitQueries.selectAllIncludingDeleted(::habit).executeAsList().map { habit ->
+        items = database.habitQueries.selectAllIncludingDeleted(::habitFromSql).executeAsList().map { habit ->
             val version = versionFor(HABIT, habit.uid, habit.updatedAt)
             if (habit.isDeleted) LegacyHabitSnapshotV2Item(habit.uid, version, true)
             else LegacyHabitSnapshotV2Item(
@@ -187,8 +188,7 @@ class LegacyV2SyncFacade(
         if (deleted) {
             database.habitQueries.softDeleteHabit(version.ts, uid)
         } else value?.let { habit ->
-            database.habitQueries.insertHabit(habit.uid, habit.name, habit.description, habit.color?.toLong(), habit.iconKey, habit.categoryUid, habit.period.name, habit.timesPerPeriod.toLong(), habit.goalType.name, habit.totalTarget?.toLong(), habit.status.name, habit.sortOrder.toLong(), habit.reminder?.localTime, habit.reminder?.isEnabled?.asLong(), habit.createdAt, habit.updatedAt, 0)
-            database.habitQueries.updateHabit(habit.name, habit.description, habit.color?.toLong(), habit.iconKey, habit.categoryUid, habit.period.name, habit.timesPerPeriod.toLong(), habit.goalType.name, habit.totalTarget?.toLong(), habit.status.name, habit.sortOrder.toLong(), habit.reminder?.localTime, habit.reminder?.isEnabled?.asLong(), habit.updatedAt, 0, habit.uid)
+            database.upsertHabit(habit, deleted = false)
             records.forEach(::saveRecord)
         }
         saveVersion(HABIT, uid, version.toV2())
@@ -238,7 +238,6 @@ class LegacyV2SyncFacade(
 
     private fun task(uid: String, title: String, note: String, startAt: String?, dueAt: String?, state: String, completedAt: String?, categoryUid: String?, isStarred: Long, calendarEventId: Long?, createdAt: String, updatedAt: String, isDeleted: Long) = Task(uid, title, note, startAt, dueAt, state.toState(), completedAt, categoryUid, isStarred.asBoolean(), calendarEventId, createdAt, updatedAt, isDeleted.asBoolean(), database.taskSubtaskQueries.selectForTask(uid, ::subtask).executeAsList())
     private fun subtask(uid: String, taskUid: String, content: String, done: Long, order: Long, createdAt: String, updatedAt: String, deleted: Long) = TaskSubtask(uid, taskUid, content, done.asBoolean(), order.toInt(), createdAt, updatedAt, deleted.asBoolean())
-    private fun habit(uid: String, name: String, description: String?, color: Long?, iconKey: String?, categoryUid: String?, period: String, times: Long, goal: String, total: Long?, status: String, order: Long, reminder: String?, enabled: Long?, createdAt: String, updatedAt: String, deleted: Long) = Habit(uid, name, description, color?.toInt(), iconKey, categoryUid, com.deadliner.domain.habit.HabitPeriod.valueOf(period), times.toInt(), com.deadliner.domain.habit.HabitGoalType.valueOf(goal), total?.toInt(), HabitStatus.valueOf(status), order.toInt(), reminder?.let { com.deadliner.domain.habit.HabitReminder(it, enabled?.asBoolean() ?: true) }, createdAt, updatedAt, deleted.asBoolean())
     private fun record(uid: String, habitUid: String, date: String, count: Long, status: String, createdAt: String, updatedAt: String, deleted: Long) = HabitRecord(uid, habitUid, date, count.toInt(), com.deadliner.domain.habit.HabitRecordStatus.valueOf(status), createdAt, updatedAt, deleted.asBoolean())
     private fun category(uid: String, name: String, icon: String, color: String, preset: Long, order: Long, createdAt: String, updatedAt: String, deleted: Long) = Category(uid, name, icon, color, preset.asBoolean(), order.toInt(), createdAt, updatedAt, deleted.asBoolean())
     private fun String.toState() = when (this) { "active" -> TaskState.ACTIVE; "completed" -> TaskState.COMPLETED; "archived" -> TaskState.ARCHIVED; "abandoned" -> TaskState.ABANDONED; "abandonedArchived" -> TaskState.ABANDONED_ARCHIVED; else -> TaskState.ACTIVE }

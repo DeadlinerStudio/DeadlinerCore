@@ -24,3 +24,6 @@ UPDATE category SET name = ?, icon_key = ?, color_hex = ?, is_preset = ?, sort_o
 
 softDeleteCategory:
 UPDATE category SET is_deleted = 1, updated_at = ? WHERE uid = ?;
+
+deleteAll:
+DELETE FROM category;

@@ -11,21 +11,35 @@ import com.deadliner.viewmodel.task.TaskListViewModel
 import com.deadliner.viewmodel.task.TaskListUiState
 import com.deadliner.viewmodel.habit.HabitListViewModel
 import com.deadliner.viewmodel.habit.HabitListUiState
+import com.deadliner.viewmodel.habit.HabitDayStatus
 import com.deadliner.viewmodel.capture.CaptureViewModel
 import com.deadliner.viewmodel.overview.OverviewViewModel
 import com.deadliner.domain.task.Task
 import com.deadliner.domain.task.TaskAction
 import com.deadliner.domain.habit.Habit
+import com.deadliner.domain.category.Category
+import com.deadliner.domain.category.CategoryMutation
+import com.deadliner.domain.category.CategoryMutationRequest
+import com.deadliner.domain.category.HabitCategoryAssignmentRequest
+import com.deadliner.domain.category.CategoryMutationResult
 import com.deadliner.domain.habit.HabitRecord
+import com.deadliner.domain.habit.HabitGoal
+import com.deadliner.domain.habit.HabitReminder
+import com.deadliner.domain.habit.HabitSchedule
 import com.deadliner.domain.habit.HabitStatusAction
+import com.deadliner.domain.habit.HabitTracking
 import com.deadliner.domain.capture.CaptureItem
 import com.deadliner.domain.memory.MemoryFragment
 import com.deadliner.domain.account.UserProfile
+import com.deadliner.platform.PlatformIdentity
+import com.deadliner.platform.DeadlinerCoreVersion
+import com.deadliner.platform.PlatformLogSink
 import com.deadliner.domain.ai.AiHabitProposal
 import com.deadliner.domain.ai.AiTaskProposal
 import com.deadliner.domain.ai.model.CoreEvent
 import com.deadliner.lifi.OhosLifiCore
 import com.deadliner.lifi.OhosLifiEventListener
+import com.deadliner.service.HabitReminderPlanner
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.COpaquePointer
@@ -41,6 +55,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
+import kotlinx.datetime.Clock
+import kotlinx.datetime.LocalDate
 
 /**
  * Small C ABI for the HarmonyOS NAPI module.
@@ -48,59 +64,144 @@ import kotlinx.coroutines.withTimeout
  * Return values are intentionally primitive so this boundary stays stable while snapshot import
  * and repository APIs are introduced in later migration phases.
  */
-private object PersistenceRuntime {
+internal object PersistenceRuntime {
     var database: DeadlinerDatabase? = null
+    private var lastInitializationError: String = ""
     private var pendingLegacyV2Merge: LegacyV2MergeCache? = null
     private var pendingChangeLogSync: ChangeLogSyncCache? = null
+    private var pendingCategoryMutation: CategoryMutationCache? = null
+    private var pendingStateMutation: StateMutationCache? = null
     private var lifiCore: OhosLifiCore? = null
     private var lifiSignature: String? = null
     private var pendingLifiUtility: LifiUtilityCache? = null
-    private val lifiEvents = mutableListOf<CoreEvent>()
+    private val lifiEvents = com.deadliner.domain.ai.agent.AgentEventBuffer()
 
     fun initialize(directory: String, installationId: String): Int = try {
+        lastInitializationError = ""
         require(directory.startsWith('/')) { "database directory must be absolute" }
         require(installationId.isNotBlank()) { "installation ID must not be blank" }
+        PlatformLogSink.configure(directory.substringBeforeLast('/'))
+        PlatformLogSink.write(
+            level = com.deadliner.platform.LogLevel.INFO,
+            category = "kmp.build",
+            message = "coreVersion=${DeadlinerCoreVersion.value}; " +
+                "bridgeVersion=${DeadlinerCoreVersion.bridgeVersion}; " +
+                "compiledAtUtc=${DeadlinerCoreVersion.compiledAtUtc}",
+        )
+        PlatformLogSink.write(
+            level = com.deadliner.platform.LogLevel.INFO,
+            category = "persistence",
+            message = "[kmp.runtime.initialize]",
+        )
         closeLifiCore()
         database?.close()
         database = DeadlinerDatabase.create(OhosDatabaseDriverFactory(directory, installationId))
         pendingLegacyV2Merge = null
         pendingChangeLogSync = null
+        pendingCategoryMutation = null
+        pendingStateMutation = null
         pendingLifiUtility = null
+        PlatformLogSink.write(
+            level = com.deadliner.platform.LogLevel.INFO,
+            category = "persistence",
+            message = "[kmp.runtime.initialized]",
+        )
         1
-    } catch (_: Throwable) {
+    } catch (error: Throwable) {
         database = null
+        lastInitializationError = error.message ?: error.toString()
+        PlatformLogSink.write(
+            level = com.deadliner.platform.LogLevel.ERROR,
+            category = "persistence",
+            message = "[kmp.runtime.initialization-failed]",
+            errorMessage = lastInitializationError,
+        )
         0
     }
 
+    fun initializationError(): String = lastInitializationError
+
     fun close(): Int {
+        PlatformLogSink.write(
+            level = com.deadliner.platform.LogLevel.INFO,
+            category = "persistence",
+            message = "[kmp.runtime.close]",
+        )
         closeLifiCore()
         database?.close()
         database = null
         pendingLegacyV2Merge = null
         pendingChangeLogSync = null
+        pendingCategoryMutation = null
+        pendingStateMutation = null
         pendingLifiUtility = null
         return 1
     }
 
-    suspend fun processLifiInput(configPayload: String, text: String): Int = try {
-        require(text.isNotBlank()) { "AI input must not be blank" }
-        val core = ensureLifiCore(configPayload)
-        core.processInput(text)
-        1
-    } catch (error: Throwable) {
-        lifiEvents += CoreEvent.OnError(error.message ?: "KMP Lifi input failed")
-        0
+    private val lifiV2Gate = kotlinx.coroutines.sync.Mutex()
+    private val lifiV2Commands = linkedMapOf<String, Pair<String, String>>()
+
+    suspend fun lifiV2Command(request: String): String {
+        lifiV2Gate.lock()
+        try {
+            val command = bridgeJson.decodeFromString<LifiV2Command>(request)
+            require(command.protocolVersion == 2) { "UNSUPPORTED_PROTOCOL" }
+            val sessionId = (database ?: error("LIFI_NOT_INITIALIZED")).memory.activeLifiSessionId()
+            if (command.command == "session") return bridgeJson.encodeToString(LifiV2Reply(sessionId = sessionId, accepted = true))
+            require(command.sessionId == sessionId) { "STALE_SESSION" }
+            val mutates = command.command !in setOf("read", "snapshot")
+            if (mutates) {
+                require(command.commandId.isNotBlank()) { "COMMAND_ID_REQUIRED" }
+                lifiV2Commands[command.commandId]?.let {
+                    require(it.first == request) { "COMMAND_ID_CONFLICT" }
+                    return it.second
+                }
+            }
+            val core = if (command.command == "start") ensureLifiCore(command.config ?: error("CONFIG_REQUIRED"))
+                else lifiCore ?: error("LIFI_NOT_INITIALIZED")
+            val result = when (command.command) {
+                "start" -> { val cursor = core.snapshotV2().lastSeq; bridgeJson.encodeToString(LifiV2Reply(runId = core.startRunV2(command.text ?: error("EMPTY_INPUT")), accepted = true, afterSeq = cursor)) }
+                "submit" -> bridgeJson.encodeToString(LifiV2Reply(accepted = core.submitToolResultV2(command.actionId ?: error("ACTION_REQUIRED"), command.tool ?: error("TOOL_REQUIRED"), command.payload ?: error("PAYLOAD_REQUIRED"))))
+                "read" -> lifiV2BatchJson(core.readEventsV2(command.consumerId, command.afterSeq))
+                "snapshot" -> lifiV2SnapshotJson(core.snapshotV2())
+                "ack" -> bridgeJson.encodeToString(LifiV2Reply(accepted = core.ackEventsV2(command.consumerId, command.batchId, command.lastSeq)))
+                "detach" -> { core.detachV2(command.consumerId); bridgeJson.encodeToString(LifiV2Reply(accepted = true)) }
+                "cancel" -> {
+                    val matches = command.runId.isNotBlank() && core.snapshotV2().runId == command.runId
+                    if (matches) core.cancelRun()
+                    bridgeJson.encodeToString(LifiV2Reply(accepted = matches))
+                }
+                else -> error("UNKNOWN_COMMAND")
+            }
+            if (mutates) {
+                lifiV2Commands[command.commandId] = request to result
+                while (lifiV2Commands.size > 128) lifiV2Commands.remove(lifiV2Commands.keys.first())
+            }
+            return result
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            val code = error.message?.takeIf { it.matches(Regex("[A-Z_]+")) } ?: "LIFI_COMMAND_FAILED"
+            return bridgeJson.encodeToString(LifiV2Reply(error = code))
+        } finally { lifiV2Gate.unlock() }
     }
 
-    suspend fun submitLifiToolResult(toolCallId: String, tool: String, payload: String): Int = try {
-        require(toolCallId.isNotBlank()) { "tool call ID must not be blank" }
-        require(tool.isNotBlank()) { "tool name must not be blank" }
-        val core = lifiCore ?: error("KMP Lifi has not been initialized")
-        core.submitToolResult(toolCallId, tool, payload)
-        1
-    } catch (error: Throwable) {
-        lifiEvents += CoreEvent.OnError(error.message ?: "KMP Lifi tool continuation failed")
-        0
+    suspend fun processLifiInput(configPayload: String, text: String): Int {
+        val core = ensureLifiCore(configPayload)
+        core.start(object : OhosLifiEventListener {
+            override fun onEvent(event: CoreEvent) {
+                if (lifiCore === core) runBlocking { lifiEvents.append(lifiEventJson(event)) }
+            }
+        })
+        return try { core.processInput(text); 1 }
+        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) { if (lifiCore === core) lifiEvents.append(lifiEventJson(CoreEvent.OnError("AI_REQUEST_FAILED"))); 0 }
+    }
+
+    suspend fun submitLifiToolResult(toolCallId: String, tool: String, payload: String): Int {
+        val core = lifiCore ?: return 0
+        return try { core.submitToolResult(toolCallId, tool, payload); 1 }
+        catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) { if (lifiCore === core) lifiEvents.append(lifiEventJson(CoreEvent.OnError("AI_REQUEST_FAILED"))); 0 }
     }
 
     suspend fun extractLifiTasksJson(configPayload: String, text: String): String? = try {
@@ -153,16 +254,26 @@ private object PersistenceRuntime {
         }
     }
 
-    fun drainLifiEventsJson(): String = bridgeJson.encodeToString(
-        lifiEvents.map(::lifiEventJson).also { lifiEvents.clear() },
-    )
+    fun drainLifiEventsJson(): String = runBlocking { lifiEvents.peek() }
 
-    fun lifiPendingEventCount(): Int = lifiEvents.size
+    fun acknowledgeLifiEvents(payload: String) = runBlocking { lifiEvents.acknowledge(payload) }
 
-    fun resetLifi(): Int {
-        closeLifiCore()
-        return 1
+    fun lifiPendingEventCount(): Int = runBlocking { lifiEvents.count() }
+
+    fun resetLifi(): Int = runBlocking {
+        lifiV2Gate.lock()
+        try {
+            closeLifiCore()
+            database?.memory?.startNewLifiSession()
+            lifiV2Commands.clear()
+            1
+        } finally { lifiV2Gate.unlock() }
     }
+
+    suspend fun executeLifiAction(actionId: String, arguments: String): String =
+        (lifiCore ?: error("LIFI_NOT_INITIALIZED")).executeApprovedTool(actionId, arguments)
+
+    suspend fun cancelLifiRun() { lifiCore?.cancelRun() }
 
     private fun ensureLifiCore(configPayload: String): OhosLifiCore {
         val config = bridgeJson.decodeFromString<LifiBridgeConfig>(configPayload)
@@ -178,13 +289,10 @@ private object PersistenceRuntime {
             model = config.model,
             timezone = config.timezone,
             memoryRepository = activeDatabase.memory,
-            profileRepository = activeDatabase.profiles,
+            executePersistedTool = activeDatabase::executeLifiTool,
+            preparePersistedTool = activeDatabase::prepareLifiTool,
+            readPersistedReceipt = activeDatabase::readLifiReceipt,
         )
-        newCore.start(object : OhosLifiEventListener {
-            override fun onEvent(event: CoreEvent) {
-                lifiEvents += event
-            }
-        })
         lifiCore = newCore
         lifiSignature = signature
         return newCore
@@ -194,7 +302,7 @@ private object PersistenceRuntime {
         lifiCore?.close()
         lifiCore = null
         lifiSignature = null
-        lifiEvents.clear()
+        runBlocking { lifiEvents.clear() }
         pendingLifiUtility = null
     }
 
@@ -267,6 +375,67 @@ private object PersistenceRuntime {
         pendingChangeLogSync = null
     }
 
+    fun configureAutomaticWebDavSync(baseUrl: String, username: String, password: String): Int = try {
+        val activeDatabase = database ?: return 0
+        if (baseUrl.isBlank()) {
+            activeDatabase.disableAutomaticSync()
+        } else {
+            activeDatabase.configureAutomaticWebDavSync(
+                WebDavTransportConfiguration(
+                    baseUrl = baseUrl,
+                    credentials = WebDavCredentials(
+                        username = username.takeIf(String::isNotBlank),
+                        password = password.takeIf(String::isNotBlank),
+                    ),
+                    requestTimeoutMillis = 15_000,
+                ),
+            )
+        }
+        1
+    } catch (_: Throwable) {
+        0
+    }
+
+    fun resolveCategoryMutationJson(
+        operation: String,
+        requestPayload: String,
+        execute: () -> String?,
+    ): String? {
+        val pending = pendingCategoryMutation
+        if (pending != null && pending.operation == operation && pending.requestPayload == requestPayload) {
+            return pending.responsePayload
+        }
+        val response = execute()
+        if (response != null) pendingCategoryMutation = CategoryMutationCache(operation, requestPayload, response)
+        return response
+    }
+
+    fun clearPendingCategoryMutation() {
+        pendingCategoryMutation = null
+    }
+
+    /**
+     * NAPI asks a mutating C ABI twice: once for the response size and once for its bytes.
+     * Retain the first response so each user action is committed exactly once.
+     */
+    fun resolveStateMutationJson(
+        operation: String,
+        requestPayload: String,
+        execute: () -> String?,
+    ): String? {
+        val pending = pendingStateMutation
+        if (pending != null && pending.operation == operation && pending.requestPayload == requestPayload) {
+            return pending.responsePayload
+        }
+        val response = execute()
+        if (response != null) pendingStateMutation = StateMutationCache(operation, requestPayload, response)
+        return response
+    }
+
+    fun clearPendingStateMutation() {
+        pendingStateMutation = null
+    }
+
     /** Reads the actual KMP task-list ViewModel state; ArkTS receives only its serializable DTO. */
     fun taskListViewModelJson(): String? = try {
         val activeDatabase = database ?: return null
@@ -276,6 +445,81 @@ private object PersistenceRuntime {
     } catch (_: Throwable) {
         null
     }
+
+    /** Returns the persisted categories; presets are inserted once at database creation. */
+    fun categoryCatalogJson(): String? = try {
+        val activeDatabase = database ?: return null
+        bridgeJson.encodeToString(categoryCatalog(activeDatabase))
+    } catch (_: Throwable) {
+        null
+    }
+
+    fun createCategoryJson(payload: String): String? = try {
+        val activeDatabase = database ?: return null
+        val request = bridgeJson.decodeFromString<CategoryMutationRequest>(payload)
+        val now = Clock.System.now().toString()
+        val existing = categoryCatalog(activeDatabase)
+        val nextSortOrder = (existing.maxOfOrNull { it.sortOrder } ?: 0) + 10
+        val created = CategoryMutation.create(request, PlatformIdentity.newId(), nextSortOrder, now)
+        activeDatabase.categories.create(created)
+        bridgeJson.encodeToString(CategoryMutationResult(created, categoryCatalog(activeDatabase)))
+    } catch (_: Throwable) {
+        null
+    }
+
+    fun updateCategoryJson(payload: String): String? = try {
+        val activeDatabase = database ?: return null
+        val request = bridgeJson.decodeFromString<CategoryMutationRequest>(payload)
+        val uid = requireNotNull(request.uid) { "category uid is required" }
+        val existing = categoryCatalog(activeDatabase).firstOrNull { it.uid == uid }
+            ?: error("category not found")
+        val updated = CategoryMutation.update(existing, request, Clock.System.now().toString())
+        activeDatabase.categories.update(updated)
+        bridgeJson.encodeToString(CategoryMutationResult(updated, categoryCatalog(activeDatabase)))
+    } catch (_: Throwable) {
+        null
+    }
+
+    fun deleteCategoryJson(uid: String, updatedAt: String): String? = try {
+        val activeDatabase = database ?: return null
+        requireNotNull(activeDatabase.categories.find(uid)) { "category not found" }
+        activeDatabase.categories.softDelete(uid, updatedAt)
+        bridgeJson.encodeToString(CategoryMutationResult(categories = categoryCatalog(activeDatabase)))
+    } catch (_: Throwable) {
+        null
+    }
+
+    fun restorePresetCategoriesJson(): String? = try {
+        val activeDatabase = database ?: return null
+        bridgeJson.encodeToString(CategoryMutationResult(categories = activeDatabase.categories.restorePresets()))
+    } catch (_: Throwable) {
+        null
+    }
+
+    /** Keeps the Habit source record and the legacy Deadline carrier aligned in one SQL transaction. */
+    fun updateHabitCategoryJson(payload: String): String? = try {
+        val activeDatabase = database ?: return null
+        val request = bridgeJson.decodeFromString<HabitCategoryAssignmentRequest>(payload)
+        if (request.categoryUid != null) {
+            require(categoryCatalog(activeDatabase).any { it.uid == request.categoryUid }) { "category not found" }
+        }
+        val habit = activeDatabase.habits.find(request.uid) ?: error("habit not found")
+        val now = Clock.System.now().toString()
+        activeDatabase.database.transaction {
+            activeDatabase.habits.update(habit.copy(categoryUid = request.categoryUid, updatedAt = now))
+            val carrier = activeDatabase.tasks.find(request.uid)
+            if (carrier != null) {
+                activeDatabase.tasks.update(carrier.copy(categoryUid = request.categoryUid, updatedAt = now))
+            }
+        }
+        habitStateJson()
+    } catch (_: Throwable) {
+        null
+    }
+
+    /** Category deletion deliberately does not rewrite historical task or habit references. */
+    private fun categoryCatalog(activeDatabase: DeadlinerDatabase): List<Category> =
+        activeDatabase.categories.list().sortedBy(Category::sortOrder)
 
     /** HarmonyOS receives the same one-shot overview state consumed by the iOS bridge. */
     fun overviewViewModelJson(): String? = try {
@@ -314,12 +558,20 @@ private object PersistenceRuntime {
         null
     }
 
-    /** Reads the KMP HabitListViewModel and supplements it with the repository's record state. */
-    fun habitStateJson(): String? = try {
+    /** Reads the KMP HabitListViewModel projection for the requested calendar date. */
+    fun habitStateJson(selectedDate: String? = null): String? = try {
         val activeDatabase = database ?: return null
-        val state = HabitListViewModel(activeDatabase.habits, CoroutineScope(Dispatchers.Default)).loadNow()
+        val viewModel = HabitListViewModel(activeDatabase.habits, CoroutineScope(Dispatchers.Default))
+        val state = viewModel.loadNow().let { initialState ->
+            if (selectedDate == null) {
+                initialState
+            } else {
+                viewModel.selectDate(selectedDate)
+                viewModel.uiState.value
+            }
+        }
         check(state.error == null) { state.error ?: "KMP habit ViewModel failed" }
-        bridgeJson.encodeToString(HabitBridgeState(state.habits, state.records))
+        bridgeJson.encodeToString(state.toHabitBridgeState())
     } catch (_: Throwable) {
         null
     }
@@ -431,7 +683,7 @@ private object PersistenceRuntime {
         val activeDatabase = database ?: return null
         val state = operation(activeDatabase)
         check(state.error == null) { state.error ?: "KMP habit ViewModel intent failed" }
-        bridgeJson.encodeToString(HabitBridgeState(state.habits, state.records))
+        bridgeJson.encodeToString(state.toHabitBridgeState())
     } catch (_: Throwable) {
         null
     }
@@ -439,9 +691,9 @@ private object PersistenceRuntime {
     fun diagnosticsJson(): String {
         val activeDatabase = database
         if (activeDatabase == null) {
-            return "{\"bridge_version\":8,\"ready\":false}"
+            return "{\"bridge_version\":12,\"ready\":false}"
         }
-        return "{\"bridge_version\":8,\"ready\":true,\"categories\":" +
+        return "{\"bridge_version\":12,\"ready\":true,\"categories\":" +
             activeDatabase.categories.list().size +
             ",\"tasks\":" + activeDatabase.tasks.list().size +
             ",\"habits\":" + activeDatabase.habits.list().size +
@@ -465,137 +717,17 @@ private object PersistenceRuntime {
         val responsePayload: String,
     )
 
-    @Serializable
-    private data class LifiBridgeConfig(
-        val apiKey: String,
-        val baseUrl: String,
-        val model: String,
-        val timezone: String,
-    )
-
-    private data class LifiUtilityCache(
+    private data class CategoryMutationCache(
         val operation: String,
-        val configPayload: String,
         val requestPayload: String,
-        val response: String,
+        val responsePayload: String,
     )
 
-    @Serializable
-    private data class LifiMonthlyAnalysisRequest(
-        val monthName: String,
-        val metricsSummary: String,
-        val completedTaskNames: List<String>,
+    private data class StateMutationCache(
+        val operation: String,
+        val requestPayload: String,
+        val responsePayload: String,
     )
-
-    @Serializable
-    private data class LifiEventEnvelope(
-        val type: String,
-        val requestId: String? = null,
-        val stage: String? = null,
-        val status: String? = null,
-        val message: String? = null,
-        val agentName: String? = null,
-        val phase: String? = null,
-        val id: String? = null,
-        val toolName: String? = null,
-        val argsJson: String? = null,
-        val executionMode: String? = null,
-        val primaryIntent: String? = null,
-        val tasks: List<LifiTaskPayload> = emptyList(),
-        val habits: List<LifiHabitPayload> = emptyList(),
-        val chatResponse: String? = null,
-        val sessionSummary: String? = null,
-        val newMemories: List<String> = emptyList(),
-        val userProfile: String? = null,
-        val addedMemories: List<String> = emptyList(),
-        val profileUpdated: Boolean? = null,
-        val newRevision: Long? = null,
-    )
-
-    @Serializable
-    private data class LifiTaskPayload(val name: String, val dueTime: String? = null, val note: String? = null)
-
-    @Serializable
-    private data class LifiHabitPayload(
-        val name: String,
-        val period: String,
-        val timesPerPeriod: Int,
-        val goalType: String,
-        val totalTarget: Int? = null,
-    )
-
-    private fun lifiEventJson(event: CoreEvent): String = bridgeJson.encodeToString(
-        when (event) {
-            is CoreEvent.OnLifecycle -> LifiEventEnvelope(
-                type = "lifecycle", requestId = event.requestId, stage = event.stage,
-                status = event.status, message = event.message,
-            )
-            is CoreEvent.OnThinking -> LifiEventEnvelope(
-                type = "thinking", agentName = event.agentName, phase = event.phase, message = event.message,
-            )
-            is CoreEvent.OnTextStream -> LifiEventEnvelope(type = "textStream", message = event.chunk)
-            is CoreEvent.OnToolRequest -> LifiEventEnvelope(
-                type = "toolRequest", id = event.id, toolName = lifiToolName(event.tool),
-                argsJson = lifiToolArgsJson(event.tool),
-                executionMode = event.executionMode?.name?.lowercase(),
-            )
-            is CoreEvent.OnFinish -> LifiEventEnvelope(
-                type = "finish", primaryIntent = event.result.primaryIntent,
-                tasks = event.result.tasks.map(::lifiTaskPayload),
-                habits = event.result.habits.map(::lifiHabitPayload),
-                chatResponse = event.result.chatResponse, sessionSummary = event.result.sessionSummary,
-                newMemories = event.result.newMemories, userProfile = event.result.userProfile,
-            )
-            is CoreEvent.OnMemoryCommitted -> LifiEventEnvelope(
-                type = "memoryCommitted", addedMemories = event.addedMemories,
-                profileUpdated = event.profileUpdated, newRevision = event.newRevision,
-            )
-            is CoreEvent.OnError -> LifiEventEnvelope(type = "error", message = event.message)
-        },
-    )
-
-    private fun lifiTaskPayload(proposal: AiTaskProposal) =
-        LifiTaskPayload(name = proposal.title, dueTime = proposal.dueAt, note = proposal.note)
-
-    private fun lifiHabitPayload(proposal: AiHabitProposal) = LifiHabitPayload(
-        name = proposal.name,
-        period = proposal.period.name,
-        timesPerPeriod = proposal.timesPerPeriod,
-        goalType = proposal.goalType.name,
-        totalTarget = proposal.totalTarget,
-    )
-
-    private fun lifiToolName(call: com.deadliner.domain.ai.model.ToolCall): String = when (call) {
-        is com.deadliner.domain.ai.model.ToolCall.ReadTasks -> "read_tasks"
-        is com.deadliner.domain.ai.model.ToolCall.CreateTask -> "create_task"
-        is com.deadliner.domain.ai.model.ToolCall.UpdateDeadline -> "update_deadline"
-        is com.deadliner.domain.ai.model.ToolCall.ReadHabits -> "read_habits"
-        is com.deadliner.domain.ai.model.ToolCall.CreateHabit -> "create_habit"
-    }
-
-    private fun lifiToolArgsJson(call: com.deadliner.domain.ai.model.ToolCall): String = when (call) {
-        is com.deadliner.domain.ai.model.ToolCall.ReadTasks -> bridgeJson.encodeToString(
-            LifiReadTasksArguments(call.timeRangeDays, call.status, call.keywords, call.limit, call.sort),
-        )
-        is com.deadliner.domain.ai.model.ToolCall.CreateTask -> bridgeJson.encodeToString(
-            LifiCreateTaskArguments(call.name, call.dueTime, call.note),
-        )
-        is com.deadliner.domain.ai.model.ToolCall.UpdateDeadline -> bridgeJson.encodeToString(
-            LifiUpdateDeadlineArguments(call.taskId, call.newDueTime),
-        )
-        is com.deadliner.domain.ai.model.ToolCall.ReadHabits -> bridgeJson.encodeToString(
-            LifiReadHabitsArguments(call.keywords),
-        )
-        is com.deadliner.domain.ai.model.ToolCall.CreateHabit -> bridgeJson.encodeToString(
-            LifiCreateHabitArguments(call.name, call.period, call.timesPerPeriod, call.goalType, call.totalTarget),
-        )
-    }
-
-    @Serializable private data class LifiReadTasksArguments(val timeRangeDays: Int?, val status: String?, val keywords: List<String>, val limit: Int, val sort: String?)
-    @Serializable private data class LifiCreateTaskArguments(val name: String, val dueTime: String?, val note: String?)
-    @Serializable private data class LifiUpdateDeadlineArguments(val taskId: String, val newDueTime: String)
-    @Serializable private data class LifiReadHabitsArguments(val keywords: List<String>)
-    @Serializable private data class LifiCreateHabitArguments(val name: String, val period: String, val timesPerPeriod: Int, val goalType: String, val totalTarget: Int?)
 
     @Serializable
     private data class TaskActionRequest(
@@ -607,7 +739,55 @@ private object PersistenceRuntime {
     private data class HabitBridgeState(
         val habits: List<Habit>,
         val records: List<HabitRecord>,
+        val selectedDate: String,
+        val visibleHabits: List<HabitDayStatus>,
+        val upcomingReviews: List<HabitDayStatus>,
+        val weekOverview: List<HabitDayOverviewBridge>,
+        val reminderPlans: List<HabitReminderPlanBridge>,
     )
+
+    @Serializable
+    private data class HabitDayOverviewBridge(
+        val date: String,
+        val completedCount: Int,
+        val totalCount: Int,
+        val completionRatio: Float,
+    )
+
+    @Serializable
+    private data class HabitReminderPlanBridge(
+        val habitUid: String,
+        val scheduledLocalDateTimes: List<String>,
+    )
+
+    private fun HabitListUiState.toHabitBridgeState(): HabitBridgeState {
+        val from = LocalDate.parse(selectedDate)
+        return HabitBridgeState(
+            habits = habits,
+            records = records,
+            selectedDate = selectedDate,
+            visibleHabits = visibleHabits,
+            upcomingReviews = upcomingReviews,
+            weekOverview = weekOverview.map { day ->
+                HabitDayOverviewBridge(
+                    date = day.date,
+                    completedCount = day.completedCount,
+                    totalCount = day.totalCount,
+                    completionRatio = day.completionRatio,
+                )
+            },
+            reminderPlans = habits.map { habit ->
+                HabitReminderPlanBridge(
+                    habitUid = habit.uid,
+                    scheduledLocalDateTimes = HabitReminderPlanner.plan(
+                        habit,
+                        records.filter { it.habitUid == habit.uid },
+                        from,
+                    ),
+                )
+            },
+        )
+    }
 
     @Serializable
     private data class HabitStatusActionRequest(
@@ -629,7 +809,7 @@ private object PersistenceRuntime {
 
 }
 
-private fun writeCallerOwnedJson(
+internal fun writeCallerOwnedJson(
     payload: String?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
@@ -643,6 +823,47 @@ private fun writeCallerOwnedJson(
     return requiredCapacity
 }
 
+/**
+ * A NAPI caller first asks for the required size and then calls again with a buffer. Category
+ * mutations must run only once, so retain their serialized response between those two calls.
+ */
+private fun writeCategoryMutationJson(
+    operation: String,
+    requestPayload: String,
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+    execute: () -> String?,
+): Int {
+    val writeResult = writeCallerOwnedJson(
+        PersistenceRuntime.resolveCategoryMutationJson(operation, requestPayload, execute),
+        output,
+        outputCapacity,
+    )
+    if (output != null && writeResult > 0 && outputCapacity >= writeResult) {
+        PersistenceRuntime.clearPendingCategoryMutation()
+    }
+    return writeResult
+}
+
+/** Writes a task or habit mutation response without re-running the mutation during NAPI's size probe. */
+internal fun writeStateMutationJson(
+    operation: String,
+    requestPayload: String,
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+    execute: () -> String?,
+): Int {
+    val writeResult = writeCallerOwnedJson(
+        PersistenceRuntime.resolveStateMutationJson(operation, requestPayload, execute),
+        output,
+        outputCapacity,
+    )
+    if (output != null && writeResult > 0 && outputCapacity >= writeResult) {
+        PersistenceRuntime.clearPendingStateMutation()
+    }
+    return writeResult
+}
+
 @CName("deadliner_persistence_initialize")
 fun deadlinerPersistenceInitialize(
     directory: CPointer<ByteVar>?,
@@ -653,94 +874,14 @@ fun deadlinerPersistenceInitialize(
     return PersistenceRuntime.initialize(resolvedDirectory, resolvedInstallationId)
 }
 
+@CName("deadliner_persistence_last_initialization_error")
+fun deadlinerPersistenceLastInitializationError(
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int = writeCallerOwnedJson(PersistenceRuntime.initializationError(), output, outputCapacity)
+
 @CName("deadliner_persistence_close")
 fun deadlinerPersistenceClose(): Int = PersistenceRuntime.close()
-
-@CName("deadliner_lifi_process_input")
-fun deadlinerLifiProcessInput(
-    configPayload: CPointer<ByteVar>?,
-    text: CPointer<ByteVar>?,
-): Int {
-    val resolvedConfig = configPayload?.toKString() ?: return 0
-    val resolvedText = text?.toKString() ?: return 0
-    return runBlocking { PersistenceRuntime.processLifiInput(resolvedConfig, resolvedText) }
-}
-
-@CName("deadliner_lifi_submit_tool_result")
-fun deadlinerLifiSubmitToolResult(
-    toolCallId: CPointer<ByteVar>?,
-    tool: CPointer<ByteVar>?,
-    payload: CPointer<ByteVar>?,
-): Int {
-    val resolvedId = toolCallId?.toKString() ?: return 0
-    val resolvedTool = tool?.toKString() ?: return 0
-    val resolvedPayload = payload?.toKString() ?: return 0
-    return runBlocking { PersistenceRuntime.submitLifiToolResult(resolvedId, resolvedTool, resolvedPayload) }
-}
-
-@CName("deadliner_lifi_extract_tasks_json")
-fun deadlinerLifiExtractTasksJson(
-    configPayload: CPointer<ByteVar>?,
-    text: CPointer<ByteVar>?,
-    output: CPointer<ByteVar>?,
-    outputCapacity: Int,
-): Int {
-    val resolvedConfig = configPayload?.toKString() ?: return 0
-    val resolvedText = text?.toKString() ?: return 0
-    val writeResult = runBlocking {
-        writeCallerOwnedJson(PersistenceRuntime.extractLifiTasksJson(resolvedConfig, resolvedText), output, outputCapacity)
-    }
-    if (output != null && writeResult > 0 && outputCapacity >= writeResult) PersistenceRuntime.clearPendingLifiUtility()
-    return writeResult
-}
-
-@CName("deadliner_lifi_extract_habits_json")
-fun deadlinerLifiExtractHabitsJson(
-    configPayload: CPointer<ByteVar>?,
-    text: CPointer<ByteVar>?,
-    output: CPointer<ByteVar>?,
-    outputCapacity: Int,
-): Int {
-    val resolvedConfig = configPayload?.toKString() ?: return 0
-    val resolvedText = text?.toKString() ?: return 0
-    val writeResult = runBlocking {
-        writeCallerOwnedJson(PersistenceRuntime.extractLifiHabitsJson(resolvedConfig, resolvedText), output, outputCapacity)
-    }
-    if (output != null && writeResult > 0 && outputCapacity >= writeResult) PersistenceRuntime.clearPendingLifiUtility()
-    return writeResult
-}
-
-@CName("deadliner_lifi_generate_monthly_analysis_json")
-fun deadlinerLifiGenerateMonthlyAnalysisJson(
-    configPayload: CPointer<ByteVar>?,
-    requestPayload: CPointer<ByteVar>?,
-    output: CPointer<ByteVar>?,
-    outputCapacity: Int,
-): Int {
-    val resolvedConfig = configPayload?.toKString() ?: return 0
-    val resolvedRequest = requestPayload?.toKString() ?: return 0
-    val writeResult = runBlocking {
-        writeCallerOwnedJson(
-            PersistenceRuntime.generateLifiMonthlyAnalysisJson(resolvedConfig, resolvedRequest),
-            output,
-            outputCapacity,
-        )
-    }
-    if (output != null && writeResult > 0 && outputCapacity >= writeResult) PersistenceRuntime.clearPendingLifiUtility()
-    return writeResult
-}
-
-@CName("deadliner_lifi_drain_events_json")
-fun deadlinerLifiDrainEventsJson(
-    output: CPointer<ByteVar>?,
-    outputCapacity: Int,
-): Int = writeCallerOwnedJson(PersistenceRuntime.drainLifiEventsJson(), output, outputCapacity)
-
-@CName("deadliner_lifi_pending_event_count")
-fun deadlinerLifiPendingEventCount(): Int = PersistenceRuntime.lifiPendingEventCount()
-
-@CName("deadliner_lifi_reset")
-fun deadlinerLifiReset(): Int = PersistenceRuntime.resetLifi()
 
 @CName("deadliner_persistence_health")
 fun deadlinerPersistenceHealth(): Int = if (PersistenceRuntime.database == null) 0 else 1
@@ -797,11 +938,80 @@ fun deadlinerPersistenceSyncWebDavChangeLogJson(
     return writeResult
 }
 
+@CName("deadliner_persistence_configure_automatic_webdav_sync")
+fun deadlinerPersistenceConfigureAutomaticWebDavSync(
+    baseUrl: CPointer<ByteVar>?,
+    username: CPointer<ByteVar>?,
+    password: CPointer<ByteVar>?,
+): Int {
+    val resolvedBaseUrl = baseUrl?.toKString() ?: return 0
+    val resolvedUsername = username?.toKString() ?: return 0
+    val resolvedPassword = password?.toKString() ?: return 0
+    return PersistenceRuntime.configureAutomaticWebDavSync(
+        resolvedBaseUrl,
+        resolvedUsername,
+        resolvedPassword,
+    )
+}
+
 @CName("deadliner_persistence_task_list_view_model_json")
 fun deadlinerPersistenceTaskListViewModelJson(
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
 ): Int = writeCallerOwnedJson(PersistenceRuntime.taskListViewModelJson(), output, outputCapacity)
+
+@CName("deadliner_persistence_category_catalog_json")
+fun deadlinerPersistenceCategoryCatalogJson(
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int = writeCallerOwnedJson(PersistenceRuntime.categoryCatalogJson(), output, outputCapacity)
+
+@CName("deadliner_persistence_category_create_json")
+fun deadlinerPersistenceCategoryCreateJson(
+    payload: CPointer<ByteVar>?,
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int {
+    val resolvedPayload = payload?.toKString() ?: return 0
+    return writeCategoryMutationJson("create", resolvedPayload, output, outputCapacity) {
+        PersistenceRuntime.createCategoryJson(resolvedPayload)
+    }
+}
+
+@CName("deadliner_persistence_category_update_json")
+fun deadlinerPersistenceCategoryUpdateJson(
+    payload: CPointer<ByteVar>?,
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int {
+    val resolvedPayload = payload?.toKString() ?: return 0
+    return writeCategoryMutationJson("update", resolvedPayload, output, outputCapacity) {
+        PersistenceRuntime.updateCategoryJson(resolvedPayload)
+    }
+}
+
+@CName("deadliner_persistence_category_delete_json")
+fun deadlinerPersistenceCategoryDeleteJson(
+    uid: CPointer<ByteVar>?,
+    updatedAt: CPointer<ByteVar>?,
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int {
+    val resolvedUid = uid?.toKString() ?: return 0
+    val resolvedUpdatedAt = updatedAt?.toKString() ?: return 0
+    val requestPayload = resolvedUid + "\u001F" + resolvedUpdatedAt
+    return writeCategoryMutationJson("delete", requestPayload, output, outputCapacity) {
+        PersistenceRuntime.deleteCategoryJson(resolvedUid, resolvedUpdatedAt)
+    }
+}
+
+@CName("deadliner_persistence_category_restore_presets_json")
+fun deadlinerPersistenceCategoryRestorePresetsJson(
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int = writeCategoryMutationJson("restore_presets", "", output, outputCapacity) {
+    PersistenceRuntime.restorePresetCategoriesJson()
+}
 
 @CName("deadliner_persistence_overview_view_model_json")
 fun deadlinerPersistenceOverviewViewModelJson(
@@ -814,14 +1024,24 @@ fun deadlinerPersistenceTaskCreateJson(
     taskPayload: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(taskPayload?.toKString()?.let(PersistenceRuntime::createTaskJson), output, outputCapacity)
+): Int {
+    val payload = taskPayload?.toKString() ?: return 0
+    return writeStateMutationJson("task_create", payload, output, outputCapacity) {
+        PersistenceRuntime.createTaskJson(payload)
+    }
+}
 
 @CName("deadliner_persistence_task_update_json")
 fun deadlinerPersistenceTaskUpdateJson(
     taskPayload: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(taskPayload?.toKString()?.let(PersistenceRuntime::updateTaskJson), output, outputCapacity)
+): Int {
+    val payload = taskPayload?.toKString() ?: return 0
+    return writeStateMutationJson("task_update", payload, output, outputCapacity) {
+        PersistenceRuntime.updateTaskJson(payload)
+    }
+}
 
 @CName("deadliner_persistence_task_action_json")
 fun deadlinerPersistenceTaskActionJson(
@@ -829,11 +1049,13 @@ fun deadlinerPersistenceTaskActionJson(
     actionPayload: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(
-    if (uid == null || actionPayload == null) null else PersistenceRuntime.applyTaskActionJson(uid.toKString(), actionPayload.toKString()),
-    output,
-    outputCapacity,
-)
+): Int {
+    val resolvedUid = uid?.toKString() ?: return 0
+    val payload = actionPayload?.toKString() ?: return 0
+    return writeStateMutationJson("task_action", resolvedUid + "\u001F" + payload, output, outputCapacity) {
+        PersistenceRuntime.applyTaskActionJson(resolvedUid, payload)
+    }
+}
 
 @CName("deadliner_persistence_task_delete_json")
 fun deadlinerPersistenceTaskDeleteJson(
@@ -841,86 +1063,13 @@ fun deadlinerPersistenceTaskDeleteJson(
     updatedAt: CPointer<ByteVar>?,
     output: CPointer<ByteVar>?,
     outputCapacity: Int,
-): Int = writeCallerOwnedJson(
-    if (uid == null || updatedAt == null) null else PersistenceRuntime.deleteTaskJson(uid.toKString(), updatedAt.toKString()),
-    output,
-    outputCapacity,
-)
-
-@CName("deadliner_persistence_habit_state_json")
-fun deadlinerPersistenceHabitStateJson(
-    output: CPointer<ByteVar>?,
-    outputCapacity: Int,
-): Int = writeCallerOwnedJson(PersistenceRuntime.habitStateJson(), output, outputCapacity)
-
-@CName("deadliner_persistence_habit_create_json")
-fun deadlinerPersistenceHabitCreateJson(
-    habitPayload: CPointer<ByteVar>?,
-    output: CPointer<ByteVar>?,
-    outputCapacity: Int,
-): Int = writeCallerOwnedJson(habitPayload?.toKString()?.let(PersistenceRuntime::createHabitJson), output, outputCapacity)
-
-@CName("deadliner_persistence_habit_update_json")
-fun deadlinerPersistenceHabitUpdateJson(
-    habitPayload: CPointer<ByteVar>?,
-    output: CPointer<ByteVar>?,
-    outputCapacity: Int,
-): Int = writeCallerOwnedJson(habitPayload?.toKString()?.let(PersistenceRuntime::updateHabitJson), output, outputCapacity)
-
-@CName("deadliner_persistence_habit_status_action_json")
-fun deadlinerPersistenceHabitStatusActionJson(
-    uid: CPointer<ByteVar>?,
-    actionPayload: CPointer<ByteVar>?,
-    output: CPointer<ByteVar>?,
-    outputCapacity: Int,
-): Int = writeCallerOwnedJson(
-    if (uid == null || actionPayload == null) null else PersistenceRuntime.applyHabitStatusJson(uid.toKString(), actionPayload.toKString()),
-    output,
-    outputCapacity,
-)
-
-@CName("deadliner_persistence_habit_toggle_record_json")
-fun deadlinerPersistenceHabitToggleRecordJson(
-    uid: CPointer<ByteVar>?,
-    recordPayload: CPointer<ByteVar>?,
-    output: CPointer<ByteVar>?,
-    outputCapacity: Int,
-): Int = writeCallerOwnedJson(
-    if (uid == null || recordPayload == null) null else PersistenceRuntime.toggleHabitRecordJson(uid.toKString(), recordPayload.toKString()),
-    output,
-    outputCapacity,
-)
-
-@CName("deadliner_persistence_habit_save_record_json")
-fun deadlinerPersistenceHabitSaveRecordJson(
-    recordPayload: CPointer<ByteVar>?,
-    output: CPointer<ByteVar>?,
-    outputCapacity: Int,
-): Int = writeCallerOwnedJson(recordPayload?.toKString()?.let(PersistenceRuntime::saveHabitRecordJson), output, outputCapacity)
-
-@CName("deadliner_persistence_habit_clear_records_json")
-fun deadlinerPersistenceHabitClearRecordsJson(
-    uid: CPointer<ByteVar>?,
-    recordPayload: CPointer<ByteVar>?,
-    output: CPointer<ByteVar>?,
-    outputCapacity: Int,
-): Int = writeCallerOwnedJson(
-    if (uid == null || recordPayload == null) null else PersistenceRuntime.clearHabitRecordsJson(uid.toKString(), recordPayload.toKString()),
-    output,
-    outputCapacity,
-)
-
-@CName("deadliner_persistence_habit_delete_json")
-fun deadlinerPersistenceHabitDeleteJson(
-    uid: CPointer<ByteVar>?,
-    updatedAt: CPointer<ByteVar>?,
-    output: CPointer<ByteVar>?,
-    outputCapacity: Int,
-): Int = writeCallerOwnedJson(
-    if (uid == null || updatedAt == null) null else PersistenceRuntime.deleteHabitJson(uid.toKString(), updatedAt.toKString()),
-    output,
-    outputCapacity,
-)
+): Int {
+    val resolvedUid = uid?.toKString() ?: return 0
+    val timestamp = updatedAt?.toKString() ?: return 0
+    return writeStateMutationJson("task_delete", resolvedUid + "\u001F" + timestamp, output, outputCapacity) {
+        PersistenceRuntime.deleteTaskJson(resolvedUid, timestamp)
+    }
+}
 
 @CName("deadliner_persistence_import_captures_json")
 fun deadlinerPersistenceImportCapturesJson(capturePayload: CPointer<ByteVar>?): Int =
@@ -971,7 +1120,19 @@ fun deadlinerPersistenceDiagnosticsJson(
 }
 
 @CName("deadliner_persistence_bridge_version")
-fun deadlinerPersistenceBridgeVersion(): Int = 8
+fun deadlinerPersistenceBridgeVersion(): Int = DeadlinerCoreVersion.bridgeVersion
+
+/**
+ * Writes the compile-time KMP core build identifier into caller-owned UTF-8 memory.
+ *
+ * The two-call convention matches the rest of this ABI: call with `output = null` to obtain the
+ * required byte capacity (including the null terminator), then call again with that buffer.
+ */
+@CName("deadliner_persistence_core_version")
+fun deadlinerPersistenceCoreVersion(
+    output: CPointer<ByteVar>?,
+    outputCapacity: Int,
+): Int = writeCallerOwnedJson(DeadlinerCoreVersion.value, output, outputCapacity)
 
 /*
  * Some HarmonyOS system libcurl builds predate libcurl's WebSocket entry points. Ktor's Curl

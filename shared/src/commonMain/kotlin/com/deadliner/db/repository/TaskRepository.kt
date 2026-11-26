@@ -1,13 +1,22 @@
 package com.deadliner.db.repository
 
 import com.deadliner.db.AppDatabase
+import com.deadliner.db.repository.focus.ActiveFocusTimerStore
+import com.deadliner.domain.focus.FocusTaskPolicy
 import com.deadliner.domain.task.Task
+import com.deadliner.domain.task.TaskDeadlineAdjustmentCommands
+import com.deadliner.domain.task.TaskDeadlineDelay
+import com.deadliner.domain.task.TaskDeadlineUnit
+import com.deadliner.domain.task.TaskDeadlineOutcome
+import com.deadliner.domain.task.TaskDeadlineResult
+import com.deadliner.domain.task.TaskDeadlineShift
 import com.deadliner.domain.task.TaskAction
 import com.deadliner.domain.task.TaskActionOutcome
 import com.deadliner.domain.task.TaskState
 import com.deadliner.domain.task.TaskStateMachine
 import com.deadliner.domain.task.TaskSubtask
 import com.deadliner.model.ChangeOperation
+import com.deadliner.sync.RepositoryMutationNotifier
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
@@ -16,17 +25,75 @@ class TaskRepository(
     private val database: AppDatabase,
     private val changeLog: ChangeLogRepository,
     private val json: Json = Json,
-) {
+    private val mutationNotifier: RepositoryMutationNotifier = RepositoryMutationNotifier.NONE,
+    private val activeTimers: ActiveFocusTimerStore = ActiveFocusTimerStore(database),
+) : TaskDeadlineAdjustmentCommands {
     fun list(): List<Task> = database.taskQueries.selectAll(::toTask).executeAsList().map(::withSubtasks)
 
     fun find(uid: String): Task? = database.taskQueries.selectByUid(uid, ::toTask).executeAsOneOrNull()?.let(::withSubtasks)
 
     fun create(task: Task) = save(task, ChangeOperation.INSERT)
 
-    fun update(task: Task) = save(task, ChangeOperation.UPDATE)
+    fun update(task: Task): TaskActionResult {
+        var result: TaskActionResult? = null
+        database.transaction {
+            val existing = find(task.uid)
+            result = if (existing != null && FocusTaskPolicy.requiresResolution(existing, task, activeTimers.current())) {
+                TaskActionResult(existing, TaskActionOutcome.TIMER_REQUIRES_RESOLUTION)
+            } else {
+                saveInTransaction(task, ChangeOperation.UPDATE)
+                TaskActionResult(task, TaskActionOutcome.APPLIED)
+            }
+        }
+        return requireNotNull(result).also {
+            if (it.outcome == TaskActionOutcome.APPLIED) mutationNotifier.notifyMutation()
+        }
+    }
+
+    /** Reads and updates dueAt in one transaction so repeated commands accumulate safely. */
+    override fun postponeOneDay(taskUid: String, occurredAt: String): TaskDeadlineResult =
+        postpone(taskUid, TaskDeadlineDelay(1, TaskDeadlineUnit.DAYS), occurredAt)
+
+    override fun postpone(taskUid: String, delay: TaskDeadlineDelay, occurredAt: String): TaskDeadlineResult {
+        if (!delay.isValid) return TaskDeadlineResult(null, TaskDeadlineOutcome.INVALID_DELAY)
+        var result: TaskDeadlineResult? = null
+        database.transaction {
+            val current = find(taskUid)
+            val dueAt = TaskDeadlineShift.postponed(current?.dueAt, delay)
+            result = when {
+                current == null || current.isDeleted -> TaskDeadlineResult(null, TaskDeadlineOutcome.NOT_FOUND)
+                dueAt == null -> TaskDeadlineResult(current, TaskDeadlineOutcome.INVALID_DEADLINE)
+                else -> {
+                    val updated = current.copy(dueAt = dueAt, updatedAt = occurredAt)
+                    saveInTransaction(updated, ChangeOperation.UPDATE)
+                    TaskDeadlineResult(updated, TaskDeadlineOutcome.APPLIED)
+                }
+            }
+        }
+        return requireNotNull(result).also {
+            if (it.outcome == TaskDeadlineOutcome.APPLIED) mutationNotifier.notifyMutation()
+        }
+    }
 
     /** KMP is the sole authority for persisted task-state transitions. */
     fun applyAction(uid: String, action: TaskAction, occurredAt: String): TaskActionResult {
+        var result: TaskActionResult? = null
+        database.transaction {
+            val existing = find(uid)
+            result = when {
+                existing == null -> TaskActionResult(null, TaskActionOutcome.NOT_FOUND)
+                FocusTaskPolicy.requiresResolution(existing, action, activeTimers.current()) ->
+                    TaskActionResult(existing, TaskActionOutcome.TIMER_REQUIRES_RESOLUTION)
+                else -> applyActionInTransaction(uid, action, occurredAt)
+            }
+        }
+        return requireNotNull(result).also {
+            if (it.outcome == TaskActionOutcome.APPLIED) mutationNotifier.notifyMutation()
+        }
+    }
+
+    /** Reuses the Task state machine inside a larger business transaction without notifying early. */
+    internal fun applyActionInTransaction(uid: String, action: TaskAction, occurredAt: String): TaskActionResult {
         val existing = find(uid) ?: return TaskActionResult(null, TaskActionOutcome.NOT_FOUND)
         val target = TaskStateMachine.apply(existing.state, action)
         if (target == null) {
@@ -40,70 +107,96 @@ class TaskRepository(
             completedAt = completedAtAfter(existing, target, occurredAt),
             updatedAt = occurredAt,
         )
-        save(updated, ChangeOperation.UPDATE)
+        saveInTransaction(updated, ChangeOperation.UPDATE)
         return TaskActionResult(updated, TaskActionOutcome.APPLIED)
     }
 
-    fun delete(uid: String, updatedAt: String) {
+    fun delete(uid: String, updatedAt: String): TaskActionResult {
+        var result: TaskActionResult? = null
         database.transaction {
-            database.taskSubtaskQueries.selectAllForTask(uid, ::toSubtask).executeAsList().forEach { subtask ->
-                if (!subtask.isDeleted) {
-                    database.taskSubtaskQueries.softDeleteSubtask(updatedAt, subtask.uid)
-                    changeLog.appendLocal("task_subtask", subtask.uid, ChangeOperation.DELETE, null)
+            val existing = find(uid)
+            result = when {
+                existing == null -> TaskActionResult(null, TaskActionOutcome.NOT_FOUND)
+                FocusTaskPolicy.requiresResolutionForDelete(uid, activeTimers.current()) ->
+                    TaskActionResult(existing, TaskActionOutcome.TIMER_REQUIRES_RESOLUTION)
+                else -> {
+                    deleteInTransaction(uid, updatedAt)
+                    TaskActionResult(existing.copy(updatedAt = updatedAt, isDeleted = true), TaskActionOutcome.APPLIED)
                 }
             }
-            database.taskQueries.softDeleteTask(updatedAt, uid)
-            changeLog.appendLocal("task", uid, ChangeOperation.DELETE, null)
         }
+        return requireNotNull(result).also {
+            if (it.outcome == TaskActionOutcome.APPLIED) mutationNotifier.notifyMutation()
+        }
+    }
+
+    /** Deletes one child from the latest persisted task and records its sync tombstone atomically. */
+    fun deleteSubtask(taskUid: String, subtaskUid: String, updatedAt: String): TaskActionResult {
+        var result: TaskActionResult? = null
+        database.transaction {
+            val current = find(taskUid)
+            result = when {
+                current == null || current.isDeleted -> TaskActionResult(null, TaskActionOutcome.NOT_FOUND)
+                current.subtasks.none { it.uid == subtaskUid } -> TaskActionResult(current, TaskActionOutcome.NO_OP)
+                else -> {
+                    database.taskSubtaskQueries.softDeleteSubtask(updatedAt, subtaskUid)
+                    changeLog.appendLocal("task_subtask", subtaskUid, ChangeOperation.DELETE, null)
+                    val updated = current.copy(
+                        subtasks = current.subtasks.filterNot { it.uid == subtaskUid },
+                        updatedAt = updatedAt,
+                    )
+                    saveInTransaction(updated, ChangeOperation.UPDATE)
+                    TaskActionResult(updated, TaskActionOutcome.APPLIED)
+                }
+            }
+        }
+        return requireNotNull(result).also {
+            if (it.outcome == TaskActionOutcome.APPLIED) mutationNotifier.notifyMutation()
+        }
+    }
+
+    internal fun deleteInTransaction(uid: String, updatedAt: String) {
+        database.taskSubtaskQueries.selectAllForTask(uid, ::toSubtask).executeAsList().forEach { subtask ->
+            if (!subtask.isDeleted) {
+                database.taskSubtaskQueries.softDeleteSubtask(updatedAt, subtask.uid)
+                changeLog.appendLocal("task_subtask", subtask.uid, ChangeOperation.DELETE, null)
+            }
+        }
+        database.taskQueries.softDeleteTask(updatedAt, uid)
+        changeLog.appendLocal("task", uid, ChangeOperation.DELETE, null)
     }
 
     private fun save(task: Task, operation: ChangeOperation) {
         database.transaction {
-            ensureCategoryReference(task.categoryUid, task.updatedAt)
-            database.taskQueries.insertTask(
-                task.uid, task.title, task.note, task.startAt, task.dueAt, task.state.persistedValue(),
-                task.completedAt, task.categoryUid, task.isStarred.asLong(), task.calendarEventId,
-                task.createdAt, task.updatedAt, task.isDeleted.asLong(),
-            )
-            database.taskQueries.updateTask(
-                task.title, task.note, task.startAt, task.dueAt, task.state.persistedValue(), task.completedAt,
-                task.categoryUid, task.isStarred.asLong(), task.calendarEventId, task.updatedAt,
-                task.isDeleted.asLong(), task.uid,
-            )
-            task.subtasks.forEach { subtask ->
-                database.taskSubtaskQueries.insertSubtask(
-                    subtask.uid, subtask.taskUid, subtask.content, subtask.isCompleted.asLong(),
-                    subtask.sortOrder.toLong(), subtask.createdAt, subtask.updatedAt, subtask.isDeleted.asLong(),
-                )
-                database.taskSubtaskQueries.updateSubtask(
-                    subtask.taskUid, subtask.content, subtask.isCompleted.asLong(), subtask.sortOrder.toLong(),
-                    subtask.updatedAt, subtask.isDeleted.asLong(), subtask.uid,
-                )
-                changeLog.appendLocal("task_subtask", subtask.uid, operation, json.encodeToJsonElement(subtask).jsonObject)
-            }
-            changeLog.appendLocal("task", task.uid, operation, json.encodeToJsonElement(task).jsonObject)
+            saveInTransaction(task, operation)
         }
+        mutationNotifier.notifyMutation()
     }
 
-    /**
-     * Categories are not rendered on HarmonyOS yet, but KMP still retains their identifiers so
-     * that iOS metadata is not lost. A historical task may arrive before the category change-log
-     * entry (or the category may predate changelog sync altogether). Preserve the relationship by
-     * creating a local placeholder; the authoritative category record later updates it in place.
-     */
-    private fun ensureCategoryReference(categoryUid: String?, timestamp: String) {
-        if (categoryUid == null) return
-        database.categoryQueries.insertCategory(
-            categoryUid,
-            "未命名分类",
-            "folder",
-            "#808080",
-            false.asLong(),
-            Int.MAX_VALUE.toLong(),
-            timestamp,
-            timestamp,
-            false.asLong(),
+    private fun saveInTransaction(task: Task, operation: ChangeOperation) {
+        database.ensureCategoryReference(task.categoryUid, task.updatedAt)
+        database.taskQueries.insertTask(
+            task.uid, task.title, task.note, task.startAt, task.dueAt, task.state.persistedValue(),
+            task.completedAt, task.categoryUid, task.isStarred.asLong(), task.calendarEventId,
+            task.createdAt, task.updatedAt, task.isDeleted.asLong(),
         )
+        database.taskQueries.updateTask(
+            task.title, task.note, task.startAt, task.dueAt, task.state.persistedValue(), task.completedAt,
+            task.categoryUid, task.isStarred.asLong(), task.calendarEventId, task.updatedAt,
+            task.isDeleted.asLong(), task.uid,
+        )
+        task.subtasks.forEach { subtask ->
+            database.taskSubtaskQueries.insertSubtask(
+                subtask.uid, subtask.taskUid, subtask.content, subtask.isCompleted.asLong(),
+                subtask.sortOrder.toLong(), subtask.createdAt, subtask.updatedAt, subtask.isDeleted.asLong(),
+            )
+            database.taskSubtaskQueries.updateSubtask(
+                subtask.taskUid, subtask.content, subtask.isCompleted.asLong(), subtask.sortOrder.toLong(),
+                subtask.updatedAt, subtask.isDeleted.asLong(), subtask.uid,
+            )
+            changeLog.appendLocal("task_subtask", subtask.uid, operation, json.encodeToJsonElement(subtask).jsonObject)
+        }
+        changeLog.appendLocal("task", task.uid, operation, json.encodeToJsonElement(task).jsonObject)
     }
 
     private fun completedAtAfter(current: Task, target: TaskState, occurredAt: String): String? = when (target) {
