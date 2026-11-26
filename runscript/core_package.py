@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Install one binary from a digest-pinned, publicly readable Deadliner GHCR package."""
+"""Install one binary from a digest-pinned, versioned Deadliner GHCR package."""
 import argparse
+import base64
+from functools import lru_cache
 import hashlib
 import json
 import os
@@ -11,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -36,12 +39,50 @@ def digest(path):
     return "sha256:" + h.hexdigest()
 
 
+def github_credentials():
+    token = os.environ.get("GHCR_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        user = os.environ.get("GHCR_USERNAME") or os.environ.get("GITHUB_ACTOR")
+        if not user:
+            raise ValueError("Set GHCR_USERNAME to the account that owns GHCR_TOKEN.")
+        return user, token
+
+    # GUI builds may start with Apple's minimal PATH instead of the user's shell PATH.
+    gh = shutil.which("gh")
+    if not gh and sys.platform == "darwin":
+        gh = next((str(p) for p in (Path("/opt/homebrew/bin/gh"), Path("/usr/local/bin/gh"))
+                   if p.is_file()), None)
+    if not gh:
+        raise ValueError("Install GitHub CLI and log in with read:packages, or set GHCR_USERNAME and GHCR_TOKEN.")
+    def query(*args):
+        result = subprocess.run([gh, *args], capture_output=True, text=True, check=False)
+        if result.returncode or not result.stdout.strip():
+            raise ValueError("Log in with gh auth login --hostname github.com --scopes read:packages.")
+        return result.stdout.strip()
+    user = query("api", "--hostname", "github.com", "user", "--jq", ".login")
+    return user, query("auth", "token", "--hostname", "github.com")
+
+
+@lru_cache(maxsize=1)
+def pull_token():
+    user, credential = github_credentials()
+    exchange = urllib.request.Request(REGISTRY + "/token?service=ghcr.io&scope=repository:" + REPOSITORY + ":pull")
+    basic = base64.b64encode((user + ":" + credential).encode("utf-8")).decode("ascii")
+    exchange.add_unredirected_header("Authorization", "Basic " + basic)
+    try:
+        with urllib.request.urlopen(exchange, timeout=45) as response:
+            return json.load(response)["token"]
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise ValueError("GHCR denied Core package access. Check package Read permission and "
+                             "read:packages (gh auth refresh -h github.com -s read:packages). "
+                             "Actions needs packages: read and repository access to the package.") from exc
+        raise
+
+
 def read_registry(kind, name):
-    url = REGISTRY + "/token?service=ghcr.io&scope=repository:" + REPOSITORY + ":pull"
-    with urllib.request.urlopen(url, timeout=45) as response:
-        token = json.load(response)["token"]
     req = urllib.request.Request(f"{REGISTRY}/v2/{REPOSITORY}/{kind}/{name}", headers={"Accept": MEDIA})
-    req.add_unredirected_header("Authorization", "Bearer " + token)
+    req.add_unredirected_header("Authorization", "Bearer " + pull_token())
     return urllib.request.urlopen(req, timeout=120)
 
 

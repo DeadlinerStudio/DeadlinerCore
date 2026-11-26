@@ -149,7 +149,7 @@ commit or push operates on Core alone. For a coordinated LiFi upgrade, push the
 reviewed private commit first, then update `lifi.revision` to its full SHA in
 the matching Core change.
 
-### Public binary packages
+### Organization binary packages
 
 Versioned mobile libraries, the macOS App framework and desktop CLI archives are published together at
 `ghcr.io/deadlinerstudio/deadliner-core`. Each OCI manifest records the Core,
@@ -170,9 +170,22 @@ to inspect the embedded Core revision and LiFi availability.
 Clients pin the same package in `core-package.lock.json` using the version and
 full OCI manifest digest. Their build hooks run a vendored copy of
 `runscript/core_package.py` with the corresponding platform and destination.
-The first build downloads that platform's binary anonymously. Subsequent builds
+The first build downloads that platform's binary using the developer's GitHub identity. Subsequent builds
 reuse the verified cache under `.deadliner-core/packages/`. To upgrade, update
 the version and digest together in a client change and rebuild.
+
+The package is private and inherits read access from the LiFi repository.
+For local IDE or terminal builds, log in once with
+`gh auth login -h github.com -s read:packages`. For an existing login use
+`gh auth refresh -h github.com -s read:packages`. The installer reads the active
+CLI credential and validates both the OCI manifest and the platform blob.
+Alternatively, pass `GHCR_USERNAME` and a classic PAT with `read:packages`
+as `GHCR_TOKEN` through the local credential environment.
+
+For Actions, grant the client repository **Read** in the package's **Manage Actions
+access** settings. Set job permissions to `contents: read` and `packages: read`,
+then pass `GHCR_USERNAME: ${{ github.actor }}` and `GHCR_TOKEN: ${{ github.token }}`
+to the install step. The resulting token expires with the job.
 
 ### Local mobile release archives
 
