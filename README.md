@@ -172,25 +172,19 @@ The first build downloads that platform's binary anonymously. Subsequent builds
 reuse the verified cache under `.deadliner-core/packages/`. To upgrade, update
 the version and digest together in a client change and rebuild.
 
-### Mobile client releases
+### Local mobile release archives
 
-Build all client artifacts on a trusted macOS machine, then publish only binaries
-to a **private** GitHub Release. The release script forces private mode:
-
+For local verification on macOS, build all three mobile libraries with the private
+LiFi checkout and inspect their checksums and Apple dSYM UUIDs:
 
 ```bash
 runscript/releaseBinaries.sh v0.2.0
-# Inspect build/releases/v0.2.0, then publish the same artifacts:
-runscript/releaseBinaries.sh v0.2.0 --upload
+(cd build/releases/v0.2.0 && shasum -a 256 -c checksums-sha256.txt)
 ```
 
-The generated release contains an Android AAR, an Apple XCFramework ZIP, the
-HarmonyOS arm64 shared library, and SHA-256 checksums in `manifest.json` and
-`checksums-sha256.txt`. The upload command refuses public repositories to avoid
-exposing closed-source binaries. iOS consumers can use the XCFramework ZIP from
-a binary-only Swift Package; Android can consume the AAR directly or through a
-private Maven registry; HarmonyOS should download the matching `.so` and verify
-its checksum before copying it into its native-library directory.
+For a separate private GitHub Release, pass `--upload --repo OWNER/REPO` on
+the initial build of a fresh version. Organization Packages are published by
+the private Actions workflow described above.
 
 ## Boundaries
 
