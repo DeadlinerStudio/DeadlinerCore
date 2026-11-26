@@ -153,12 +153,10 @@ the matching Core change.
 
 Versioned mobile libraries, the macOS App framework and desktop CLI archives are published together at
 `ghcr.io/deadlinerstudio/deadliner-core`. Each OCI manifest records the Core,
-CLI and LiFi revisions. The publisher builds from `core.revision` in the private
-LiFi repository and uses this Core revision's `cli.revision` and `lifi.revision`.
-The release also pins the macOS framework configuration and desktop packaging
-tools. Its OCI annotations identify the packager and original native build run.
-Its Actions token reads LiFi and publishes packages. Public Core builds use the
-source-only lint workflow.
+CLI and LiFi revisions. The private Actions workflow and the local publisher use the same package format.
+The hosted workflow builds from `core.revision` in the LiFi repository, pins the
+macOS configuration and desktop packager, and records its native build run. Both
+paths use the selected Core commit's `cli.revision` and `lifi.revision`.
 
 Download all files with `oras pull ghcr.io/deadlinerstudio/deadliner-core:<version>`.
 For reproducible builds, replace `:<version>` with `@sha256:<manifest digest>`.
@@ -187,6 +185,58 @@ access** settings. Set job permissions to `contents: read` and `packages: read`,
 then pass `GHCR_USERNAME: ${{ github.actor }}` and `GHCR_TOKEN: ${{ github.token }}`
 to the install step. The resulting token expires with the job.
 
+### Build locally and publish to GitHub Packages
+
+If all seven archives/libraries and the mobile build's `manifest.json`,
+`checksums-sha256.txt` and `apple-dsym-uuids.txt` are already in one directory,
+run these commands from Core. Use Python 3.9+, ORAS 1.2+ and a GitHub login with
+write access to the organization package (`gh auth refresh -h github.com -s write:packages`).
+
+```sh
+python3 runscript/publishCorePackage.py --check /path/to/release
+python3 runscript/publishCorePackage.py /path/to/release
+```
+
+`--check` creates and verifies a temporary OCI layout offline. Publishing uploads
+only the named binaries and release metadata and prints the JSON for the client
+lockfile. A retry with identical files returns the existing digest. Give each
+new set of binaries a new version and run one publisher per version.
+
+To build the files locally, start on an Apple Silicon Mac with the normal Core
+build toolchain (JDK 21, Android SDK, Xcode and HarmonyOS native SDK). The script
+builds the committed Core HEAD and the two commits pinned by Core in disposable
+checkouts. It reads LiFi from `.private/lifi`, the macOS framework configuration
+from `../Deadliner-macOS`, and the public CLI repository from GitHub. Set
+`DEADLINER_LIFI_REPO`, `DEADLINER_MAC_REPO` or `DEADLINER_CLI_REPO` to use
+other checkouts. `DEADLINER_MAC_REVISION` can pin the macOS configuration.
+
+```sh
+runscript/buildLocalPackage.sh v0.2.0-preview.20261126.3
+```
+
+The example writes `build/local-packages/v0.2.0-preview.20261126.3/`. Its
+`release/` contains the mobile libraries, macOS framework and native CLI. Copy
+`jars/`, `packager/`, `core.revision` and `packageLocalDesktop.py` from the bundle
+to each of your Linux x64 and Windows x64 machines or VMs. With `JAVA_HOME`
+pointing to an x64 JDK 21, run `python3 packageLocalDesktop.py` on Linux and
+`py -3 packageLocalDesktop.py` on Windows. Windows also needs Go and the Windows
+SDK with `mt.exe`. The script tests each native launcher and runs the integration
+suite before writing its archive. Copy `deadliner-linux-x64.tar.gz` and
+`deadliner-windows-x64.zip` back into `release/`, then run the two publisher
+commands above with that directory. This path uses local compute throughout.
+
+To reuse a tested Windows x64 runtime on macOS, select a previously released OCI
+manifest by digest. Its packager revision must match the new build. From Core run:
+
+```sh
+python3 runscript/repackWindowsCli.py build/local-packages/<version-tag> sha256:<baseline-manifest-digest>
+```
+
+This writes a new Windows ZIP to the bundle’s `release/` with all of the local
+JARs and the verified template’s launcher, runtime and license. The publisher
+records the template digests in the new OCI manifest. Run the Windows build
+on a Windows host when changing the launcher or runtime.
+
 ### Local mobile release archives
 
 For local verification on macOS, build all three mobile libraries with the private
@@ -198,8 +248,7 @@ runscript/releaseBinaries.sh v0.2.0
 ```
 
 For a separate private GitHub Release, pass `--upload --repo OWNER/REPO` on
-the initial build of a fresh version. Organization Packages are published by
-the private Actions workflow described above.
+the initial build of a fresh version. For GitHub Packages, use the local publisher above after assembling all seven platform files.
 
 ## Boundaries
 
