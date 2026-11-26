@@ -151,7 +151,7 @@ the matching Core change.
 
 ### Public binary packages
 
-Versioned mobile libraries and desktop CLI archives are published together at
+Versioned mobile libraries, the macOS App framework and desktop CLI archives are published together at
 `ghcr.io/deadlinerstudio/deadliner-core`. Each OCI manifest records the Core,
 CLI and LiFi revisions. The publisher builds from `core.revision` in the private
 LiFi repository and uses this Core revision's `cli.revision` and `lifi.revision`.
@@ -161,9 +161,16 @@ source-only lint workflow.
 Download all files with `oras pull ghcr.io/deadlinerstudio/deadliner-core:<version>`.
 For reproducible builds, replace `:<version>` with `@sha256:<manifest digest>`.
 The package contains the Android AAR, iOS XCFramework ZIP, HarmonyOS arm64 shared
-library, and CLI archives for macOS ARM64, Linux x64 and Windows x64. Linux and
+library, the macOS ARM64 Shared.framework, and CLI archives for macOS ARM64, Linux x64 and Windows x64. Linux and
 Windows archives include the runtime. Run the extracted CLI with `--json version`
 to inspect the embedded Core revision and LiFi availability.
+
+Clients pin the same package in `core-package.lock.json` using the version and
+full OCI manifest digest. Their build hooks run a vendored copy of
+`runscript/core_package.py` with the corresponding platform and destination.
+The first build downloads that platform's binary anonymously. Subsequent builds
+reuse the verified cache under `.deadliner-core/packages/`. To upgrade, update
+the version and digest together in a client change and rebuild.
 
 ### Mobile client releases
 
@@ -192,8 +199,9 @@ its checksum before copying it into its native-library directory.
 - Network transport and remote business-table application are ports, not HTTP implementations.
 
 
-## IDE builds including private Lifi
+## Local Core source builds
 
+Set `DEADLINER_CORE_SOURCE=local` to work against a sibling Core checkout.
 Install the pinned private checkout once with `runscript/setupLifi.sh`. Android
 Studio Run/Debug and APK/AAB builds, Xcode Run/Archive, and DevEco Run/Debug/HAP
 builds invoke Core automatically. These app entry points require private Lifi by
